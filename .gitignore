@@ -1,0 +1,3 @@
+# iverilog 构建产物与波形
+*.vvp
+*.vcd
