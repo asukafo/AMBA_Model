@@ -1,21 +1,27 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_slave_ram — 可综合 AXI4 RAM slave（reference design）
+// axi_slave_ram - synthesizable AXI4 RAM slave (reference design)
 //
-// 真 RAM 存储（DEPTH 字节，2 的幂），支持多笔 outstanding（定深队列）：
-//   - AW 队列接收写地址；W 拍按 WSTRB 掩码写入当前条目（按 AW 顺序），
-//     WLAST 后把加宽 AWID 压入 B 队列，B 无延迟回显
-//   - AR 队列接收读地址；R 突发按拍从 RAM 读出（组合读口），RVALID
-//     保持到 RREADY，中途不掉
-//   - 突发地址计算支持 INCR/WRAP/FIXED（axi_beat_addr，可综合）
+// True RAM storage (DEPTH bytes, power of 2), multiple outstanding
+// transactions (fixed-depth queues):
+//   - an AW queue receives write addresses; W beats write the current entry
+//     masked by WSTRB (in AW order); after WLAST the widened AWID is pushed
+//     into the B queue and echoed back on B without delay
+//   - an AR queue receives read addresses; the R burst reads the RAM beat by
+//     beat (combinational read port); RVALID is held until RREADY and never
+//     drops mid-burst
+//   - burst address computation supports INCR/WRAP/FIXED (axi_beat_addr,
+//     synthesizable)
 //
-// 地址窗口：addr[$clog2(DEPTH)-1:0] 索引内存（调用方保证窗口内）。
+// Address window: memory is indexed by addr[$clog2(DEPTH)-1:0] (the caller
+// guarantees accesses stay within the window).
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// Port style: flat packed vectors (iverilog-compatible subset), fully
+// synthesizable.
 //------------------------------------------------------------------------------
 module axi_slave_ram #(
   parameter int SLV_ID = 0,
-  parameter int DEPTH  = 4096,   // 字节数，2 的幂
+  parameter int DEPTH  = 4096,   // bytes, power of 2
   parameter int AW_Q   = 4,
   parameter int AR_Q   = 4
 ) (
@@ -28,7 +34,7 @@ module axi_slave_ram #(
   input  wire [7:0]               awlen,
   input  wire [2:0]               awsize,
   input  wire [1:0]               awburst,
-  input  wire                     awlock,   // 互斥写（AWLOCK=1）
+  input  wire                     awlock,   // exclusive write (AWLOCK=1)
   output wire awready,
   // ---- W ----
   input  wire wvalid,
@@ -48,7 +54,7 @@ module axi_slave_ram #(
   input  wire [7:0]               arlen,
   input  wire [2:0]               arsize,
   input  wire [1:0]               arburst,
-  input  wire                     arlock,   // 互斥读（ARLOCK=1）
+  input  wire                     arlock,   // exclusive read (ARLOCK=1)
   output wire arready,
   // ---- R ----
   output reg rvalid,
@@ -57,7 +63,7 @@ module axi_slave_ram #(
   output reg [1:0]               rresp,
   output reg rlast,
   input  wire rready,
-  // ---- 调试读口（TB 校验内存，组合读出）----
+  // ---- Debug read port (TB memory checking, combinational) ----
   input  wire [`AXI_ADDR_W-1:0]   dbg_addr,
   output wire [7:0]               dbg_byte
 );
@@ -70,37 +76,37 @@ module axi_slave_ram #(
       mem[i] = 8'h00;
   end
 
-  // ---- AW 队列 ----
+  // ---- AW queue ----
   reg [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
   reg [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
   reg [7:0]               awq_len   [0:AW_Q-1];
   reg [2:0]               awq_size  [0:AW_Q-1];
   reg [1:0]               awq_burst [0:AW_Q-1];
-  reg                     awq_exok  [0:AW_Q-1];  // 互斥写成功标记
+  reg                     awq_exok  [0:AW_Q-1];  // exclusive-write success flag
   reg [$clog2(AW_Q)-1:0]  awq_wr, awq_rd;
   reg [$clog2(AW_Q+1)-1:0] awq_cnt;
 
-  // ---- B 队列（ID + 互斥成功标记）----
+  // ---- B queue (ID + exclusive success flag) ----
   reg [`AXI_SLV_ID_W-1:0] bq_id  [0:AW_Q-1];
   reg                     bq_exok [0:AW_Q-1];
   reg [$clog2(AW_Q)-1:0]  bq_wr, bq_rd;
   reg [$clog2(AW_Q+1)-1:0] bq_cnt;
 
-  // ---- AR 队列 ----
+  // ---- AR queue ----
   reg [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
   reg [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
   reg [7:0]               arq_len   [0:AR_Q-1];
   reg [2:0]               arq_size  [0:AR_Q-1];
   reg [1:0]               arq_burst [0:AR_Q-1];
-  reg                     arq_excl  [0:AR_Q-1];  // 互斥读标记
+  reg                     arq_excl  [0:AR_Q-1];  // exclusive-read flag
   reg [$clog2(AR_Q)-1:0]  arq_wr, arq_rd;
   reg [$clog2(AR_Q+1)-1:0] arq_cnt;
 
-  // ---- 互斥监视器（简化版：全局单一监视点，非按地址）----
+  // ---- Exclusive monitor (simplified: one global monitor point, not per-address) ----
   reg                     excl_own;
   reg [`AXI_SLV_ID_W-1:0] excl_id;
 
-  // ---- 拍计数 / 组合地址 ----
+  // ---- Beat counters / combinational addresses ----
   reg [7:0]               w_beat_cnt, r_beat_cnt;
   reg [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
 
@@ -112,7 +118,7 @@ module axi_slave_ram #(
   assign bresp   = bq_exok[bq_rd] ? `AXI_RESP_EXOKAY : `AXI_RESP_OKAY;
 
   //==========================================================================
-  // 写路径：W 拍写 RAM（AW 顺序）/ AW 接收 / B 发送
+  // Write path: W beats write the RAM (in AW order) / AW receive / B send
   //==========================================================================
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
@@ -122,13 +128,13 @@ module axi_slave_ram #(
       excl_own <= 1'b0;
       excl_id  <= '0;
     end else begin
-      // ---- W 拍 ----
+      // ---- W beat ----
       w_addr_c = axi_beat_addr(awq_addr[awq_rd], awq_burst[awq_rd],
                                awq_size[awq_rd], awq_len[awq_rd], w_beat_cnt);
       if (wvalid && wready) begin
         for (int i = 0; i < `AXI_DATA_W/8; i++) begin
           if (wstrb[i])
-            // lane 映射：lane i 写到字对齐基址 + i（AXI 窄传输规则）
+            // Lane mapping: lane i writes byte at word-aligned base + i (AXI narrow-transfer rule)
             mem[{w_addr_c[A_W-1:2], 2'b00} + i] <= wdata[8*i +: 8];
         end
         if (wlast) begin
@@ -143,39 +149,40 @@ module axi_slave_ram #(
           w_beat_cnt <= w_beat_cnt + 8'd1;
         end
       end
-      // ---- AW 接收 ----
+      // ---- AW receive ----
       if (awvalid && awready) begin
         awq_id[awq_wr]    <= awid;
         awq_addr[awq_wr]  <= awaddr;
         awq_len[awq_wr]   <= awlen;
         awq_size[awq_wr]  <= awsize;
         awq_burst[awq_wr] <= awburst;
-        // 互斥写判定：监视点仍归本 master 且 AWLOCK=1 → EXOKAY；
-        // 任何写（含普通写）都会消耗/清除监视点
+        // Exclusive-write decision: EXOKAY if the monitor point is still owned
+        // by this master and AWLOCK=1; any write (including normal ones)
+        // consumes/clears the monitor point
         awq_exok[awq_wr]  <= awlock && excl_own && (excl_id === awid);
         excl_own <= 1'b0;
         awq_wr <= (awq_wr == AW_Q-1) ? '0 : awq_wr + 1'b1;
-        // 若同拍 W 完成上一笔（pop），净变化为 0
+        // If W also completes the previous entry in the same cycle (pop), net change is 0
         awq_cnt <= (wvalid && wready && wlast) ? awq_cnt : awq_cnt + 1'b1;
       end
-      // ---- B 发送 ----
+      // ---- B send ----
       if (bq_cnt > 0 && bvalid && bready) begin
         bq_rd <= (bq_rd == AW_Q-1) ? '0 : bq_rd + 1'b1;
-        // 若同拍 W 完成新压入一笔，净变化为 0
+        // If W also pushes a new entry in the same cycle, net change is 0
         bq_cnt <= (wvalid && wready && wlast) ? bq_cnt : bq_cnt - 1'b1;
       end
     end
   end
 
   //==========================================================================
-  // 读路径：AR 接收 / R 拍（RLAST 握手时 pop）
+  // Read path: AR receive / R beats (pop on the RLAST handshake)
   //==========================================================================
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
       arq_wr <= '0; arq_rd <= '0; arq_cnt <= '0;
       r_beat_cnt <= 8'd0;
     end else begin
-      // ---- R 拍 ----
+      // ---- R beat ----
       if (rvalid && rready) begin
         if (rlast) begin
           arq_rd  <= (arq_rd == AR_Q-1) ? '0 : arq_rd + 1'b1;
@@ -185,27 +192,27 @@ module axi_slave_ram #(
           r_beat_cnt <= r_beat_cnt + 8'd1;
         end
       end
-      // ---- AR 接收 ----
+      // ---- AR receive ----
       if (arvalid && arready) begin
         arq_id[arq_wr]    <= arid;
         arq_addr[arq_wr]  <= araddr;
         arq_len[arq_wr]   <= arlen;
         arq_size[arq_wr]  <= arsize;
         arq_burst[arq_wr] <= arburst;
-        // 互斥读：建立监视点（简化全局单点），响应回 EXOKAY
+        // Exclusive read: establish the monitor point (simplified global one); respond EXOKAY
         arq_excl[arq_wr] <= arlock;
         if (arlock) begin
           excl_own <= 1'b1;
           excl_id  <= arid;
         end
         arq_wr <= (arq_wr == AR_Q-1) ? '0 : arq_wr + 1'b1;
-        // 若同拍 R 完成上一笔（pop），净变化为 0
+        // If R also completes the previous entry in the same cycle (pop), net change is 0
         arq_cnt <= (rvalid && rready && rlast) ? arq_cnt : arq_cnt + 1'b1;
       end
     end
   end
 
-  // ---- R 输出（组合）：RVALID 保持到 READY，突发中途不掉 ----
+  // ---- R output (combinational): RVALID held until READY, never drops mid-burst ----
   always_comb begin
     rvalid = (arq_cnt > 0);
     rid    = arq_id[arq_rd];
@@ -213,13 +220,13 @@ module axi_slave_ram #(
     rlast  = (r_beat_cnt == arq_len[arq_rd]);
     r_addr_c = axi_beat_addr(arq_addr[arq_rd], arq_burst[arq_rd],
                              arq_size[arq_rd], arq_len[arq_rd], r_beat_cnt);
-    // little-endian 拼字
-    // lane 映射：lane L 读字对齐基址 + L（AXI 窄传输规则）
+    // Lane mapping: lane L reads byte at word-aligned base + L (AXI narrow-transfer rule);
+    // little-endian word assembly
     rdata = {mem[{r_addr_c[A_W-1:2], 2'b00}+3], mem[{r_addr_c[A_W-1:2], 2'b00}+2],
              mem[{r_addr_c[A_W-1:2], 2'b00}+1], mem[{r_addr_c[A_W-1:2], 2'b00}]};
   end
 
-  // ---- 调试读口 ----
+  // ---- Debug read port ----
   assign dbg_byte = mem[dbg_addr[A_W-1:0]];
 
 endmodule

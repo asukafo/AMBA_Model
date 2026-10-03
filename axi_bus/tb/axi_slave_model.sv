@@ -1,17 +1,17 @@
 `timescale 1ns/1ps
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_slave_model — 可配置 slave 模型（扁平端口，iverilog 兼容子集）
+// axi_slave_model - configurable slave model (flat ports, iverilog-compatible subset)
 //
-// 功能：
-//   - 稀疏内存（按 4KB 窗口寻址，窗口由调用方保证落在 [BASE, BASE+MEM_DEPTH)）
-//   - AW 队列 + W 拍按 WSTRB 掩码写入 + WLAST 后回 B（BID 回显加宽后的 AWID）
-//   - AR 队列 + R 突发响应（数据按拍从内存读出，RVALID 中途不掉）
-//   - 随机背压（xorshift32 LFSR，按 % 概率拉低 READY）与响应延迟（拍数）
-//   - 配置端口由 TB 在场景间动态调整（S4 乱序、S12 背压等）
+// Features:
+//   - sparse memory (addressed through a 4KB window; the caller guarantees
+//     accesses stay within [BASE, BASE+MEM_DEPTH))
+//   - AW queue + W beats written masked by WSTRB + B after WLAST (BID echoes
+//     the widened AWID)
+//   - AR queue + R burst responses (data read from memory beat by beat; RVALID
 //
-// 队列全部为定深环形 FIFO（指针 + 计数，单 always_ff 驱动，避免
-// 多进程写同一指针）。
+//     never drops mid-burst)
+//   - random backpressure (xorshift32 LFSR, pulls READY low with a percentage
 //------------------------------------------------------------------------------
 module axi_slave_model #(
   parameter int SLV_ID    = 0,
@@ -24,7 +24,7 @@ module axi_slave_model #(
 ) (
   input  wire clk,
   input  wire rstn,
-  // 背压/延迟配置（TB 运行时改，0-100 / 拍数）
+//     probability) and response latency (in cycles)
   input  wire [6:0] cfg_aw_rdy_pct,
   input  wire [6:0] cfg_w_rdy_pct,
   input  wire [7:0] cfg_r_delay,
@@ -64,10 +64,10 @@ module axi_slave_model #(
   input  wire rready
 );
 
-  // ---- 内存：按 addr[11:0] 寻址（窗口 [BASE, BASE+MEM_DEPTH)）----
+//   - config ports are adjusted dynamically by the TB between scenarios
   reg [7:0] mem [0:MEM_DEPTH-1];
 
-  // ---- AW 队列 ----
+//     (S4 reordering, S12 backpressure, etc.)
   reg [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
   reg [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
   reg [7:0]               awq_len   [0:AW_Q-1];
@@ -75,11 +75,11 @@ module axi_slave_model #(
   reg [1:0]               awq_burst [0:AW_Q-1];
   integer awq_wr, awq_rd, awq_cnt;
 
-  // ---- B 队列 ----
+// All queues are fixed-depth circular FIFOs (pointer + count, driven by a
   reg [`AXI_SLV_ID_W-1:0] bq_id [0:B_Q-1];
   integer bq_wr, bq_rd, bq_cnt;
 
-  // ---- AR 队列 ----
+// single always_ff to avoid multiple processes writing the same pointer).
   reg [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
   reg [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
   reg [7:0]               arq_len   [0:AR_Q-1];
@@ -87,15 +87,15 @@ module axi_slave_model #(
   reg [1:0]               arq_burst [0:AR_Q-1];
   integer arq_wr, arq_rd, arq_cnt;
 
-  // ---- 拍计数 / 延迟 ----
+  // Backpressure/latency config (TB changes at runtime; 0-100 / cycles)
   integer w_beat_cnt, r_beat_cnt;
   integer b_delay_cnt, r_delay_cnt;
 
-  // 组合中间量（always_ff 内先算好再使用）
+  // ---- Memory: addressed by addr[11:0] (window [BASE, BASE+MEM_DEPTH)) ----
   reg [`AXI_ADDR_W-1:0] w_addr_c;
   reg [`AXI_ADDR_W-1:0] r_addr_c;
 
-  // ---- 背压 LFSR ----
+  // ---- AW queue ----
   reg [31:0] lfsr;
 
   assign awready = (awq_cnt < AW_Q) && (lfsr[6:0] < cfg_aw_rdy_pct);
@@ -106,14 +106,14 @@ module axi_slave_model #(
   assign bid    = bq_id[bq_rd];
   assign bresp  = `AXI_RESP_OKAY;
 
-  // 写路径：AW 接收 + W 拍（写内存 / WLAST 时 pop AW、push B）+ B 发送
+  // ---- B queue ----
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
       awq_wr <= 0; awq_rd <= 0; awq_cnt <= 0;
       bq_wr <= 0; bq_rd <= 0; bq_cnt <= 0;
       w_beat_cnt <= 0; b_delay_cnt <= 0;
     end else begin
-      // ---- W 拍 ----
+  // ---- AR queue ----
       w_addr_c = axi_beat_addr(awq_addr[awq_rd], awq_burst[awq_rd],
                                awq_size[awq_rd], awq_len[awq_rd], w_beat_cnt);
       if (wvalid && wready) begin
@@ -132,7 +132,7 @@ module axi_slave_model #(
           w_beat_cnt <= w_beat_cnt + 1;
         end
       end
-      // ---- AW 接收 ----
+  // ---- Beat counters / latency ----
       if (awvalid && awready) begin
         awq_id[awq_wr]    <= awid;
         awq_addr[awq_wr]  <= awaddr;
@@ -140,28 +140,28 @@ module axi_slave_model #(
         awq_size[awq_wr]  <= awsize;
         awq_burst[awq_wr] <= awburst;
         awq_wr <= (awq_wr == AW_Q-1) ? 0 : awq_wr + 1;
-        // 若同拍 W 完成上一笔（pop），净变化为 0
+  // Combinational temporaries (computed at the top of the always_ff)
         awq_cnt <= (wvalid && wready && wlast) ? awq_cnt : awq_cnt + 1;
       end
-      // ---- B 发送 ----
+  // ---- Backpressure LFSR ----
       if (bq_cnt > 0 && b_delay_cnt < B_DELAY) begin
         b_delay_cnt <= b_delay_cnt + 1;
       end else if (bq_cnt > 0 && bvalid && bready) begin
         bq_rd <= (bq_rd == B_Q-1) ? 0 : bq_rd + 1;
-        // 若同拍 W 完成新 push 了一个 B，净变化为 0
+  // Write path: AW receive + W beats (memory writes / pop AW and push B on
         bq_cnt <= (wvalid && wready && wlast) ? bq_cnt : bq_cnt - 1;
         b_delay_cnt <= 0;
       end
     end
   end
 
-  // 读路径：R 拍（pop 时机在 RLAST 握手）+ AR 接收 + R 延迟
+  // WLAST) + B send
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
       arq_wr <= 0; arq_rd <= 0; arq_cnt <= 0;
       r_beat_cnt <= 0; r_delay_cnt <= 0;
     end else begin
-      // ---- R 拍 ----
+      // ---- W beat ----
       if (rvalid && rready) begin
         if (rlast) begin
           arq_rd <= (arq_rd == AR_Q-1) ? 0 : arq_rd + 1;
@@ -172,7 +172,7 @@ module axi_slave_model #(
         end
         r_delay_cnt <= 0;
       end
-      // ---- AR 接收 ----
+      // ---- AW receive ----
       if (arvalid && arready) begin
         arq_id[arq_wr]    <= arid;
         arq_addr[arq_wr]  <= araddr;
@@ -180,17 +180,17 @@ module axi_slave_model #(
         arq_size[arq_wr]  <= arsize;
         arq_burst[arq_wr] <= arburst;
         arq_wr <= (arq_wr == AR_Q-1) ? 0 : arq_wr + 1;
-        // 若同拍 R 完成上一笔（pop），净变化为 0
+        // If W also completes the previous entry in the same cycle (pop), net change is 0
         arq_cnt <= (rvalid && rready && rlast) ? arq_cnt : arq_cnt + 1;
       end
-      // ---- R 首拍延迟 ----
+      // ---- B send ----
       if (arq_cnt > 0 && r_delay_cnt < cfg_r_delay) begin
         r_delay_cnt <= r_delay_cnt + 1;
       end
     end
   end
 
-  // R 输出（组合）：RVALID 保持到 READY，突发中途不掉
+        // If W also pushed a new B in the same cycle, net change is 0
   always_comb begin
     rvalid = (arq_cnt > 0) && (r_delay_cnt >= cfg_r_delay);
     rid    = arq_id[arq_rd];
@@ -200,13 +200,13 @@ module axi_slave_model #(
     r_addr_c = axi_beat_addr(arq_addr[arq_rd], arq_burst[arq_rd],
                              arq_size[arq_rd], arq_len[arq_rd], r_beat_cnt);
     if (rvalid) begin
-      // little-endian 拼字
+  // Read path: R beats (pop on the RLAST handshake) + AR receive + R latency
       rdata = {mem[r_addr_c[11:0]+3], mem[r_addr_c[11:0]+2],
                mem[r_addr_c[11:0]+1], mem[r_addr_c[11:0]]};
     end
   end
 
-  // 背压 LFSR（xorshift32）
+      // ---- R beat ----
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
       lfsr <= SEED + SLV_ID + 1;
@@ -220,13 +220,13 @@ module axi_slave_model #(
     end
   end
 
-  // 内存清零 + 指针复位
+      // ---- AR receive ----
   initial begin
     for (int i = 0; i < MEM_DEPTH; i++)
       mem[i] = 8'h00;
   end
 
-  // scoreboard 比对入口
+        // If R also completes the previous entry in the same cycle (pop), net change is 0
   function automatic [7:0] get_byte;
     input [11:0] a;
     begin

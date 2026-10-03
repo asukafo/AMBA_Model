@@ -1,19 +1,22 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_master_cfg — 可综合 AXI4 master（reference design）
+// axi_master_cfg - synthesizable AXI4 master (reference design)
 //
-// 寄存器配置 + 状态机驱动：写事务 = AW -> W 突发 -> 收 B；
-// 读事务 = AR -> 收 R 突发。读写两路 FSM 独立，可同时进行。
+// Register-configured, FSM-driven: a write transaction = AW -> W burst ->
+// receive B; a read transaction = AR -> receive the R burst. The write and
+// read FSMs are independent and may run concurrently.
 //
-// 事务数据生成（确定性，便于验证）：
-//   写第 b 拍数据 = cfg_wdata0 + b（WSTRB 全 1）
-//   读校验 = 所有读拍的 rdata 异或累加（rd_checksum），TB 侧可复算比对
+// Deterministic transaction data (easy to verify):
+//   beat b write data = cfg_wdata0 + b (WSTRB all ones)
+//   read checksum = XOR accumulation of all read-beat rdata
+//   (rd_checksum), recomputed and compared on the TB side
 //
-// 配置约定：cfg_* 必须在 busy=0 时写入，并在整个事务期间保持稳定
-// （start 脉冲的下一拍起事务拥有配置值）。
+// Config convention: cfg_* must be written while busy=0 and must stay
+// stable for the whole transaction (the transaction takes ownership of
+// the config values on the cycle after the start pulse).
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集，见 axi_interconnect.sv
-// 头部注释），全部可综合。
+// Port style: flat packed vectors (iverilog-compatible subset, see the
+// header comment of axi_interconnect.sv), fully synthesizable.
 //------------------------------------------------------------------------------
 module axi_master_cfg #(
   parameter int MST_ID     = 0,
@@ -23,23 +26,23 @@ module axi_master_cfg #(
 ) (
   input  wire clk,
   input  wire rstn,
-  // ---- 配置 / 状态（软件侧）----
-  input  wire                  wr_start,   // 写事务启动脉冲
-  input  wire                  rd_start,   // 读事务启动脉冲
+  // ---- Config / status (software side) ----
+  input  wire                  wr_start,   // write-transaction start pulse
+  input  wire                  rd_start,   // read-transaction start pulse
   input  wire [ADDR_WIDTH-1:0] cfg_addr,
-  input  wire [7:0]            cfg_len,    // 突发长度（len+1 拍）
+  input  wire [7:0]            cfg_len,    // burst length (len+1 beats)
   input  wire [2:0]            cfg_size,
   input  wire [1:0]            cfg_burst,
   input  wire [ID_WIDTH-1:0]   cfg_id,
-  input  wire [DATA_WIDTH-1:0] cfg_wdata0, // 拍 0 写数据，后续拍递增
-  input  wire [DATA_WIDTH/8-1:0] cfg_wstrb, // 写字节使能（默认全 1）
+  input  wire [DATA_WIDTH-1:0] cfg_wdata0, // beat-0 write data; later beats increment
+  input  wire [DATA_WIDTH/8-1:0] cfg_wstrb, // write byte strobes (all ones by default)
   output wire                  busy,
-  output wire                  wr_done,    // 写事务完成脉冲
-  output wire                  rd_done,    // 读事务完成脉冲
-  output reg  [1:0]            wr_status,  // 写响应码
-  output reg  [1:0]            rd_status,  // 读响应码（末拍）
-  output wire [DATA_WIDTH-1:0] rd_checksum,// 读数据异或累加
-  // ---- AXI master 端口（AW）----
+  output wire                  wr_done,    // write-transaction done pulse
+  output wire                  rd_done,    // read-transaction done pulse
+  output reg  [1:0]            wr_status,  // write response code
+  output reg  [1:0]            rd_status,  // read response code (last beat)
+  output wire [DATA_WIDTH-1:0] rd_checksum,// read-data XOR accumulation
+  // ---- AXI master ports (AW) ----
   output reg awvalid,
   output reg [ID_WIDTH-1:0]   awid,
   output reg [ADDR_WIDTH-1:0] awaddr,
@@ -76,7 +79,7 @@ module axi_master_cfg #(
 );
 
   //==========================================================================
-  // 写 FSM：IDLE -> AW -> DATA -> RESP -> DONE
+  // Write FSM: IDLE -> AW -> DATA -> RESP -> DONE
   //==========================================================================
   localparam W_IDLE = 3'd0, W_AW = 3'd1, W_DATA = 3'd2,
              W_RESP = 3'd3, W_DONE = 3'd4;
@@ -91,7 +94,7 @@ module axi_master_cfg #(
     awsize  = cfg_size;
     awburst = cfg_burst;
     wvalid  = (w_state == W_DATA);
-    wdata   = cfg_wdata0 + w_beat;   // 拍 b 数据 = base + b
+    wdata   = cfg_wdata0 + w_beat;   // beat b data = base + b
     wstrb   = cfg_wstrb;
     wlast   = (w_beat == cfg_len);
     bready  = (w_state == W_RESP);
@@ -117,7 +120,7 @@ module axi_master_cfg #(
                   wr_status <= bresp;
                   w_state   <= W_DONE;
                 end
-        // DONE 状态保持一拍（wr_done 组合输出可见），随后回 IDLE
+        // DONE state lasts one cycle (wr_done visible), then back to IDLE
         W_DONE: w_state <= W_IDLE;
         default: w_state <= W_IDLE;
       endcase
@@ -125,7 +128,7 @@ module axi_master_cfg #(
   end
 
   //==========================================================================
-  // 读 FSM：IDLE -> AR -> DATA -> DONE
+  // Read FSM: IDLE -> AR -> DATA -> DONE
   //==========================================================================
   localparam R_IDLE = 2'd0, R_AR = 2'd1, R_DATA = 2'd2, R_DONE = 2'd3;
   reg [1:0] r_state;
@@ -160,14 +163,14 @@ module axi_master_cfg #(
                     r_state   <= R_DONE;
                   end
                 end
-        // DONE 状态保持一拍（rd_done 组合输出可见），随后回 IDLE
+        // DONE state lasts one cycle (rd_done visible), then back to IDLE
         R_DONE: r_state <= R_IDLE;
         default: r_state <= R_IDLE;
       endcase
     end
   end
 
-  // done 为 DONE 状态组合输出（与 status 同拍可见）
+  // done is the combinational DONE-state output (visible in the same cycle as status)
   assign wr_done = (w_state == W_DONE);
   assign rd_done = (r_state == R_DONE);
   assign rd_checksum = chk_q;

@@ -1,16 +1,20 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_master_excl — 可综合互斥（exclusive）访问 AXI4 master（reference design）
+// axi_master_excl - synthesizable exclusive-access AXI4 master (reference design)
 //
-// 典型 spinlock 流程：start 后发 ARLOCK=1 互斥读；若响应 EXOKAY，
-// 接着发 AWLOCK=1 条件互斥写（W 数据 = cfg_wdata0 + 拍号，WSTRB 全 1），
-// 并记录写响应（EXOKAY=仍持有 / OKAY=已失去）；若读响应非 EXOKAY，
-// 跳过写阶段直接 done（wr_issued=0）。
+// Typical spinlock flow: after start, issue an exclusive read with ARLOCK=1;
+// if the response is EXOKAY, follow up with a conditional exclusive write with
+// AWLOCK=1 (W data = cfg_wdata0 + beat index, full WSTRB) and record the
+// write response (EXOKAY = still held / OKAY = lost); if the read response
 //
-// 验证互联与 slave 对 AWLOCK/ARLOCK/EXOKAY 的直通与监视语义
-// （配套 slave：axi_slave_ram 的互斥监视器）。
+// is not EXOKAY, skip the write phase and finish directly (wr_issued=0).
+// Verifies pass-through of AWLOCK/ARLOCK/EXOKAY through the interconnect
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// and the monitor semantics in the slave (companion slave: the exclusive
+// monitor of axi_slave_ram).
+//
+// Port style: flat packed vectors (iverilog-compatible subset), fully
+// synthesizable.
 //------------------------------------------------------------------------------
 module axi_master_excl #(
   parameter int MST_ID     = 0,
@@ -20,7 +24,6 @@ module axi_master_excl #(
 ) (
   input  wire clk,
   input  wire rstn,
-  // ---- 配置 / 状态（软件侧）----
   input  wire start,
   input  wire [ADDR_WIDTH-1:0] cfg_addr,
   input  wire [7:0]            cfg_len,
@@ -28,14 +31,14 @@ module axi_master_excl #(
   input  wire [1:0]            cfg_burst,
   input  wire [ID_WIDTH-1:0]   cfg_id,
   input  wire [DATA_WIDTH-1:0] cfg_wdata0,
-  input  wire [7:0]            cfg_wr_delay, // 互斥读到条件写之间的拍数（0=立即）
   output wire busy,
-  output wire done,            // DONE 状态一拍（组合输出）
-  output reg [1:0] rd_resp,   // 互斥读响应
-  output reg [1:0] wr_resp,   // 条件写响应（未发写时为 0）
-  output reg wr_issued,       // 读 EXOKAY 后确实发了互斥写
+  // ---- Config / status (software side) ----
+  input  wire [7:0]            cfg_wr_delay, // cycles between exclusive read and conditional write (0=immediate)
+  output wire done,            // one-cycle DONE-state output (combinational)
+  output reg [1:0] rd_resp,   // exclusive read response
   output wire [DATA_WIDTH-1:0] rd_checksum,
-  // ---- AXI master 端口（AW）----
+  output reg [1:0] wr_resp,   // conditional write response (0 when no write was issued)
+  output reg wr_issued,       // a conditional write was issued after an EXOKAY read
   output reg awvalid,
   output reg [ID_WIDTH-1:0]   awid,
   output reg [ADDR_WIDTH-1:0] awaddr,
@@ -89,7 +92,7 @@ module axi_master_excl #(
     awlen   = cfg_len;
     awsize  = cfg_size;
     awburst = cfg_burst;
-    awlock  = 1'b1;               // 条件互斥写恒带 AWLOCK=1
+    awlock  = 1'b1;               // conditional exclusive write always carries AWLOCK=1
     wvalid  = (e_state == E_WD);
     wdata   = cfg_wdata0 + w_beat;
     wstrb   = {(`AXI_DATA_W/8){1'b1}};
@@ -101,7 +104,7 @@ module axi_master_excl #(
     arlen   = cfg_len;
     arsize  = cfg_size;
     arburst = cfg_burst;
-    arlock  = 1'b1;               // 互斥读恒带 ARLOCK=1
+    arlock  = 1'b1;               // exclusive read always carries ARLOCK=1
     rready  = (e_state == E_RD);
   end
 
@@ -131,9 +134,9 @@ module axi_master_excl #(
                     if (rresp == `AXI_RESP_EXOKAY) begin
                       wr_issued_q <= 1'b1;
                       dly_cnt <= 8'd0;
-                      e_state <= E_DLY;   // 可配置延迟（给干扰写留窗口）
+                      e_state <= E_DLY;   // configurable delay (leaves a window for interfering writes)
                     end else begin
-                      e_state <= E_DONE;   // 互斥丢失，跳过写
+                      e_state <= E_DONE;   // exclusive lost, skip the write
                     end
                   end
                 end

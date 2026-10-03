@@ -1,32 +1,32 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// tb_axi_reg — 寄存器外设 RTL 级联调：
-//   master0 = axi_master_cfg（支持 WSTRB 字节使能配置）
-//   slave0  = axi_slave_reg（阻塞式寄存器外设）
-//   slave1  = axi_slave_ram（占位，本 TB 不使用）
+// tb_axi_reg - register-peripheral RTL-level co-verification:
+//   master0 = axi_master_cfg (supports WSTRB byte-enable configuration)
+//   slave0  = axi_slave_reg (blocking register peripheral)
+//   slave1  = axi_slave_ram (placeholder; unused by this TB)
 //
-// 检查手段：cfg master 状态码 / 读校验和 / 寄存器调试读口比对。
+// Checks: cfg master status codes / read checksums / register debug read
 //
-// 场景：
-//   G1 寄存器写（含 WSTRB 部分写）+ 读回
-//   G2 突发读写寄存器
-//   G3 DECERR 访问
+// port comparison.
+// Scenarios:
+//   G1 register writes (including WSTRB partial writes) + read back
+//   G2 burst register write/read
 //------------------------------------------------------------------------------
 module tb_axi_reg;
   timeunit 1ns / 1ps;
 
   localparam MAX_WAIT = 100000;
 
-  // ---- 时钟 / 复位 ----
+//   G3 DECERR access
   reg clk;
   reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
-  // ---- 互联连线 + DUT（共用）----
+  // ---- Clock / reset ----
   `include "tb_axi_wires.svh"
-  // 直通属性默认 0。注意：prot 的 master1 切片由 lite master 驱动，
-  // 这里只覆盖 master0（cfg master 无 prot 端口）
+  // ---- Interconnect wires + DUT (shared) ----
+  // Pass-through attributes default to 0. Note: the master1 slice of prot
   assign s_awlock = '0;
   assign s_awcache = '0;
   assign s_awprot[0*3 +: 3] = '0;
@@ -39,7 +39,7 @@ module tb_axi_reg;
   assign s_arregion = '0;
 
 
-  // ---- master0（cfg）配置 ----
+  // is driven by the lite master; only master0 is tied here (cfg master has no prot port)
   reg cfg0_wr_start, cfg0_rd_start;
   reg [`AXI_ADDR_W-1:0] cfg0_addr;
   reg [7:0] cfg0_len;
@@ -49,11 +49,11 @@ module tb_axi_reg;
   reg [`AXI_DATA_W-1:0] cfg0_wdata0;
   reg [`AXI_DATA_W/8-1:0] cfg0_wstrb;
 
-  // ---- reg slave 调试读口 ----
+  // ---- master0 (cfg) config ----
   reg [$clog2(64)-1:0] dbg_sel;
   wire [`AXI_DATA_W-1:0] dbg_val_c;
 
-  // ---- master1（lite）配置 ----
+  // ---- reg slave debug read port ----
   reg lite_wr_start, lite_rd_start;
   reg [`AXI_ADDR_W-1:0] lite_addr;
   reg [`AXI_DATA_W-1:0] lite_wdata;
@@ -105,7 +105,7 @@ module tb_axi_reg;
     .rready (s_rready[0])
   );
 
-  // ---- master1：AXI4-Lite 风格 master ----
+  // ---- master1 (lite) config ----
   axi_master_lite #(
     .MST_ID (1)
   ) mst1 (
@@ -137,18 +137,18 @@ module tb_axi_reg;
     .rready (s_rready[1])
   );
 
-  // ---- master1 缺省 AXI4 字段：Lite 子集恒为 单拍/32b/INCR/ID=0/WLAST=1 ----
+  // ---- master1: AXI4-Lite-style master ----
   assign s_awlen[1*8 +: 8]     = 8'd0;
   assign s_awsize[1*3 +: 3]    = 3'd2;
   assign s_awburst[1*2 +: 2]   = `AXI_BURST_INCR;
   assign s_awid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
-  assign s_wlast[1]            = 1'b1;   // Lite 单拍恒 WLAST
+  // ---- master1 default AXI4 fields: the Lite subset is always single-beat/32b/INCR/ID=0/WLAST=1 ----
   assign s_arlen[1*8 +: 8]     = 8'd0;
   assign s_arsize[1*3 +: 3]    = 3'd2;
   assign s_arburst[1*2 +: 2]   = `AXI_BURST_INCR;
   assign s_arid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
 
-  // slave0：寄存器外设
+  assign s_wlast[1]            = 1'b1;   // Lite single beat always drives WLAST=1
   axi_slave_reg #(
     .SLV_ID (0),
     .N_REG (64)
@@ -187,7 +187,7 @@ module tb_axi_reg;
     .dbg_val (dbg_val_c)
   );
 
-  // ---- slave1：ram 占位 ----
+  // slave0: register peripheral
   reg [`AXI_ADDR_W-1:0] dbg_addr1;
   wire [7:0] dbg_byte1_c;
   axi_slave_ram #(
@@ -237,7 +237,7 @@ module tb_axi_reg;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动：cfg master 写/读（带 WSTRB）
+  // ---- slave1: ram placeholder ----
   //--------------------------------------------------------------------------
   task automatic mst0_wr(input [`AXI_ADDR_W-1:0] addr,
                          input [7:0] len, input [2:0] size,
@@ -295,7 +295,7 @@ module tb_axi_reg;
     end
   endtask
 
-  // 读调试口
+  // Driver: cfg master write/read (with WSTRB)
   task automatic reg_rd(input integer sel, output [`AXI_DATA_W-1:0] v);
     begin
       dbg_sel = sel;
@@ -305,11 +305,11 @@ module tb_axi_reg;
   endtask
 
   //==========================================================================
-  // 场景
+  // Read debug port
   //==========================================================================
 
   //--------------------------------------------------------------------------
-  // lite 驱动：写 / 读（master1）
+  // Scenarios
   //--------------------------------------------------------------------------
   task automatic lite_wr(input [`AXI_ADDR_W-1:0] addr,
                          input [`AXI_DATA_W-1:0] data,
@@ -355,25 +355,25 @@ module tb_axi_reg;
     end
   endtask
 
-  // G1：寄存器写（全字 + WSTRB 部分写）+ 读回
+  // lite driver: write / read (master1)
   task automatic g1();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] v, chk;
     begin
-      // 全字写 reg[8]（地址 0x20）
+  // G1: register writes (full word + WSTRB partial write) + read back
       mst0_wr(32'h0000_0020, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0,
               32'h1234_5678, 4'hF, st);
       chk(st == 0, "G1 wr reg8 status");
-      // 部分写 reg[9]：只写低 2 字节（wstrb=0011，data 低 2 字节 = 0x2222）
+      // Full-word write to reg[8] (address 0x20)
       mst0_wr(32'h0000_0024, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0,
               32'h0000_2222, 4'h3, st);
       chk(st == 0, "G1 wr reg9 status");
-      // 调试口比对
+      // Partial write to reg[9]: only the lower 2 bytes (wstrb=0011, data lower 2 bytes = 0x2222)
       reg_rd(8, v);
       chk(v === 32'h1234_5678, "G1 reg8 value");
       reg_rd(9, v);
       chk(v === 32'h0000_2222, "G1 reg9 partial write");
-      // 读回校验
+      // Debug-port comparison
       mst0_rd(32'h0000_0020, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0, st, chk);
       chk(st == 0 && chk === 32'h1234_5678, "G1 read reg8");
       mst0_rd(32'h0000_0024, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0, st, chk);
@@ -382,7 +382,7 @@ module tb_axi_reg;
     end
   endtask
 
-  // G2：突发写读寄存器（reg[16..23]，数据 = base + 拍号）
+      // Read-back checks
   task automatic g2();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk, echk, v;
@@ -390,11 +390,11 @@ module tb_axi_reg;
       mst0_wr(32'h0000_0040, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd0,
               32'hAAAA_0000, 4'hF, st);
       chk(st == 0, "G2 wr burst status");
-      // 调试口抽查
+  // G2: burst register write/read (reg[16..23], data = base + beat index)
       reg_rd(16, v); chk(v === 32'hAAAA_0000, "G2 reg16");
       reg_rd(20, v); chk(v === 32'hAAAA_0004, "G2 reg20");
       reg_rd(23, v); chk(v === 32'hAAAA_0007, "G2 reg23");
-      // 读回：checksum = XOR(base + b)
+      // Debug-port spot checks
       mst0_rd(32'h0000_0040, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd0, st, chk);
       chk(st == 0, "G2 rd burst status");
       echk = 32'hAAAA_0000 ^ 32'hAAAA_0001 ^ 32'hAAAA_0002 ^ 32'hAAAA_0003 ^
@@ -404,7 +404,7 @@ module tb_axi_reg;
     end
   endtask
 
-  // G3：DECERR 访问
+      // Read back: checksum = XOR(base + b)
   task automatic g3();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk;
@@ -419,24 +419,24 @@ module tb_axi_reg;
   endtask
 
   //==========================================================================
-  // G4：Lite master 写读寄存器（部分写）
+  // G3: DECERR access
   //==========================================================================
   task automatic g4();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] d, v;
     begin
-      // 全字写 reg[10]（地址 0x28）
+  // G4: lite master register write/read (partial write)
       lite_wr(32'h0000_0028, 32'hDEAD_BEEF, 4'hF, st);
       chk(st == 0, "G4 lite wr status");
-      // 部分写 reg[11]：低 2 字节 = 0x1234
+      // Full-word write to reg[10] (address 0x28)
       lite_wr(32'h0000_002C, 32'h0000_1234, 4'h3, st);
       chk(st == 0, "G4 lite partial wr status");
-      // 读回
+      // Partial write to reg[11]: lower 2 bytes = 0x1234
       lite_rd(32'h0000_0028, st, d);
       chk(st == 0 && d === 32'hDEAD_BEEF, "G4 lite rd reg10");
       lite_rd(32'h0000_002C, st, d);
       chk(st == 0 && d === 32'h0000_1234, "G4 lite rd reg11");
-      // 调试口交叉比对
+      // Read back
       reg_rd(10, v); chk(v === 32'hDEAD_BEEF, "G4 dbg reg10");
       reg_rd(11, v); chk(v === 32'h0000_1234, "G4 dbg reg11");
       $display("[%0t] PASS G4", $time);
@@ -444,7 +444,7 @@ module tb_axi_reg;
   endtask
 
   //==========================================================================
-  // G5：cfg（m0）+ lite（m1）并发访问不同 slave
+      // Debug-port cross comparison
   //==========================================================================
   task automatic g5();
     reg [1:0] st0, st1;
@@ -457,12 +457,12 @@ module tb_axi_reg;
           chk(st0 == 0, "G5 cfg wr status");
         end
         begin
-          // lite 写 slave1（ram 占位实例）：地址 0x1000_0010
+  // G5: cfg (m0) + lite (m1) concurrently access different slaves
           lite_wr(32'h1000_0010, 32'h0102_0304, 4'hF, st1);
           chk(st1 == 0, "G5 lite wr status");
         end
       join
-      // 调试口比对（reg[24] = 0x60 >> 2）
+      // Partial write to reg[9]: only the lower 2 bytes (wstrb=0011, data lower 2 bytes = 0x2222)（reg[24] = 0x60 >> 2）
       reg_rd(24, v5);
       chk(v5 === 32'hCAFE_0000, "G5 dbg reg24");
       $display("[%0t] PASS G5", $time);
@@ -470,7 +470,7 @@ module tb_axi_reg;
   endtask
 
   //==========================================================================
-  // G6：Lite master DECERR 访问
+      // Debug-port comparison (reg[24] = 0x60 >> 2)
   //==========================================================================
   task automatic g6();
     reg [1:0] st;
@@ -485,7 +485,7 @@ module tb_axi_reg;
   endtask
 
   //--------------------------------------------------------------------------
-  // 主流程
+  // G6: lite master DECERR access
   //--------------------------------------------------------------------------
   initial begin
     $display("=== AXI4 Interconnect Register-peripheral TB ===");
@@ -512,7 +512,7 @@ module tb_axi_reg;
     $finish;
   end
 
-  // 全局超时看门狗
+  // Main flow
   initial begin
     repeat (2000000) @(posedge clk);
     $display("FAIL: global watchdog timeout");

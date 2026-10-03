@@ -1,13 +1,13 @@
 //------------------------------------------------------------------------------
-// tb_axi_wires.svh — tb_axi / tb_axi_rtl 共用：互联端口连线 + DUT 实例
+// tb_axi_wires.svh - shared by tb_axi / tb_axi_rtl / other TBs: interconnect port wires + DUT instance
 //
-// 地址映射（4KB 窗口内活动）：
+// Address map (active within 4KB windows):
 //   slave0: base 0x0000_0000 mask 0xF000_0000
 //   slave1: base 0x1000_0000 mask 0xF000_0000
-//   DECERR: 0x8000_0000 区域（未命中）
+//   DECERR: the 0x8000_0000 region (unmatched)
 //------------------------------------------------------------------------------
 
-  // ---- 互联端口信号（packed 向量——iverilog 无法驱动 unpacked 数组端口）----
+  // ---- Interconnect port signals (packed vectors - iverilog cannot drive unpacked-array ports) ----
   wire [`AXI_N_MASTER-1:0]                    s_awvalid;
   wire [`AXI_N_MASTER*`AXI_ID_W-1:0]          s_awid;
   wire [`AXI_N_MASTER*`AXI_ADDR_W-1:0]        s_awaddr;

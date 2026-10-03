@@ -1,14 +1,14 @@
-# AXI4 交叉开关互联 — 仿真（iverilog）
+# AXI4 crossbar interconnect - simulation (iverilog)
 #
-#   make sim         : RR 策略构建 + 运行（默认）
-#   make sim-fixed   : 固定优先级策略构建 + 运行
-#   make clean       : 清理产物
+#   make sim         : RR policy build + run (default)
+#   make sim-fixed   : fixed-priority policy build + run
+#   make clean       : remove build artifacts
 #
-# 宽度/规模/策略通过 -D 宏覆盖（见 rtl/axi_defs.svh）：
+# Widths/scale/policy are overridden via -D macros (see rtl/axi_defs.svh):
 #   AXI_N_MASTER / AXI_M_SLAVE / AXI_ADDR_W / AXI_DATA_W / AXI_ID_W /
 #   AXI_ARB_POLICY / AXI_RESP_POLICY ...
-# 注意：改宏时必须同步改 tb/tb_axi.sv 中的地址映射与场景
-# （TB 场景按 2 主 × 2 从硬编码）。
+# Note: changing the macros requires updating the address maps and scenarios
+# in the TBs (scenarios are hardcoded for a 2-master x 2-slave topology).
 
 IVERILOG := iverilog
 VVP      := vvp
@@ -29,38 +29,38 @@ SEED ?= 1
 
 .PHONY: sim sim-fixed sim-sliced sim-rtl sim-rtl-sliced sim-mix sim-reg sim-ext clean
 
-# RR（默认策略，AXI_ARB_POLICY=1）
+# RR (default policy, AXI_ARB_POLICY=1)
 sim: $(RTL) $(TB)
 	$(IVERILOG) $(FLAGS) -o sim.vvp $(RTL) $(TB)
 	$(VVP) -n sim.vvp +seed=$(SEED)
 
-# 固定优先级（AW/AR 与 B/R 均 FIXED）
+# Fixed priority (both AW/AR and B/R FIXED)
 sim-fixed: FLAGS += -DAXI_ARB_POLICY=0 -DAXI_RESP_POLICY=0
 sim-fixed: sim
 
-# 寄存器片构建：互联 slave 侧 5 通道全部打一拍（同场景验证协议透明性）
+# Register-slice build: all 5 slave-side channels registered (same scenarios verify protocol transparency)
 sim-sliced: FLAGS += -DAXI_REG_SLICE=1
 sim-sliced: sim
 
 sim-rtl-sliced: FLAGS += -DAXI_REG_SLICE=1
 sim-rtl-sliced: sim-rtl
 
-# RTL 级联调：可综合 master + RAM slave + 互联（R1-R6 场景）
+# RTL-level co-verification: synthesizable master + RAM slave + interconnect (R1-R6 scenarios)
 sim-rtl: $(RTL) $(RTL_REF) $(TB_RTL)
 	$(IVERILOG) $(FLAGS) -o sim_rtl.vvp $(RTL) $(RTL_REF) $(TB_RTL)
 	$(VVP) -n sim_rtl.vvp +seed=$(SEED)
 
-# 混合拓扑：cfg + pipe master × ram + lat slave（M1-M5 场景）
+# Mixed topology: cfg + pipe masters x ram + lat slaves (M1-M7 scenarios)
 sim-mix: $(RTL) $(RTL_REF) $(TB_MIX)
 	$(IVERILOG) $(FLAGS) -o sim_mix.vvp $(RTL) $(RTL_REF) $(TB_MIX)
 	$(VVP) -n sim_mix.vvp +seed=$(SEED)
 
-# 寄存器外设：cfg master + lite master + reg/ram slave（G1-G6 场景）
+# Register peripheral: cfg + lite masters x reg/ram slaves (G1-G6 scenarios)
 sim-reg: $(RTL) $(RTL_REF) $(TB_REG)
 	$(IVERILOG) $(FLAGS) -o sim_reg.vvp $(RTL) $(RTL_REF) $(TB_REG)
 	$(VVP) -n sim_reg.vvp +seed=$(SEED)
 
-# 互斥访问 + LFSR 流量：excl + lfsr master × ram(excl) + lat slave（E1-E4）
+# Exclusive access + LFSR traffic: excl + lfsr masters x ram(excl) + lat slaves (E1-E4)
 sim-ext: $(RTL) $(RTL_REF) $(TB_EXT)
 	$(IVERILOG) $(FLAGS) -o sim_ext.vvp $(RTL) $(RTL_REF) $(TB_EXT)
 	$(VVP) -n sim_ext.vvp +seed=$(SEED)

@@ -1,39 +1,39 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// tb_axi — AXI4 交叉开关互联验证环境（iverilog）
+// tb_axi - AXI4 crossbar interconnect verification environment (iverilog)
 //
-// 拓扑：2 master × 2 slave + 内部 DECERR 响应器
-//   地址映射（4KB 窗口内活动）：
+// Topology: 2 masters x 2 slaves + internal DECERR responders
+//   Address map (active within 4KB windows):
 //     slave0: base 0x0000_0000 mask 0xF000_0000
 //     slave1: base 0x1000_0000 mask 0xF000_0000
-//     DECERR: 0x8000_0000 区域（未命中）
+//     DECERR: the 0x8000_0000 region (unmatched)
 //
-// 检查手段（三层）：
-//   1. BFM 自检：RID 匹配、按 seed 生成的数据比对、响应码
-//   2. scoreboard：参考内存与每个 slave 内存逐字节比对
-//   3. 监视器：固定优先级不变量 / RR 公平性 / 超时
+// Checks (three layers):
+//   1. BFM self-checks: RID matching, seed-generated data comparison, response codes
+//   2. Scoreboard: byte-by-byte comparison of the reference memory against each slave memory
+//   3. Monitors: fixed-priority invariant / RR fairness / timeouts
 //
-// 场景（S1-S15）：
-//   S1  双主并发 INCR 读写不同 slave
-//   S2  全主抢同一 slave AW（仅 FIXED 构建：严格优先级不变量）
-//   S3  全主抢同一 slave AW（仅 RR 构建：公平计数 ±4）
-//   S4  同 master 2 读 2 slave，slave1 先回（乱序，RID 匹配）
-//   S5  WRAP 突发非对齐读写
-//   S6  窄传输随机 WSTRB（含全 0 拍）
-//   S7  DECERR 读写（B=DECERR、单拍 R=DECERR）
-//   S8  W 通道交错：两 master 先后获 AW 授权，m1 提前置 WVALID
-//   S9  DECERR 3 条 outstanding AR（FIFO 顺序）
-//   S10 双主随机混合流量 + 随机背压 + DECERR 点缀
-//   S11 随机到达间隔抢同一 slave（策略不变量/公平性）
-//   S12 DECERR 多拍写 + 另一 master 真实写并行（slave W 背压）
-//   S13 两 slave 同拍 BVALID 竞争同一 master 的 B 仲裁
-//   S14 RREADY 停摆下 R 授权锁持有（无死锁）
-//   S15 单 master 多 ID 并发读写
+// Scenarios (S1-S15):
+//   S1  two masters concurrently do INCR writes/reads to different slaves
+//   S2  all masters hammer one slave's AW (FIXED build only: strict priority invariant)
+//   S3  all masters hammer one slave's AW (RR build only: fairness count +-4)
+//   S4  one master reads 2 slaves; slave1 responds first (out of order, RID matching)
+//   S5  WRAP burst unaligned write/read
+//   S6  narrow transfers with random WSTRB (including all-zero beats)
+//   S7  DECERR write/read (B=DECERR, single-beat R=DECERR)
+//   S8  W-channel interleaving: two masters get AW grants back to back; m1 drives WVALID early
+//   S9  3 outstanding ARs to DECERR (FIFO order)
+//   S10 two-master random mixed traffic + random backpressure + sprinkled DECERR
+//   S11 random arrival intervals hammering one slave (policy invariant/fairness)
+//   S12 multi-beat DECERR write in parallel with another master's real write (slave W backpressure)
+//   S13 two slaves assert BVALID in the same cycle, contending for one master's B arbitration
+//   S14 R grant lock held while RREADY stalls (no deadlock)
+//   S15 single master with multiple concurrent IDs
 //------------------------------------------------------------------------------
 module tb_axi;
   timeunit 1ns / 1ps;
 
-  // ---- 时钟 / 复位 ----
+  // ---- Clock / reset ----
   reg clk;
   reg rstn;
   initial clk = 1'b0;
@@ -41,7 +41,7 @@ module tb_axi;
 
   `include "tb_axi_wires.svh"
 
-  // slave 配置（背压概率 / 读延迟）
+  // Slave config (backpressure probability / read latency)
   reg [6:0] cfg_aw_rdy_pct [`AXI_M_SLAVE];
   reg [6:0] cfg_w_rdy_pct  [`AXI_M_SLAVE];
   reg [7:0] cfg_r_delay    [`AXI_M_SLAVE];
@@ -85,7 +85,7 @@ module tb_axi;
     );
   end
 
-  // ---- slave 模型 ----
+  // ---- Slave models ----
   for (genvar i = 0; i < `AXI_M_SLAVE; i++) begin : g_slv
     axi_slave_model #(
       .SLV_ID (i),
@@ -128,7 +128,7 @@ module tb_axi;
   end
 
   //--------------------------------------------------------------------------
-  // scoreboard：参考内存（每 slave 一个 4KB 窗口，拍平成 1D）
+  // Scoreboard: reference memory (one 4KB window per slave, flattened to 1D)
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
   reg [7:0] ref_mem [0:SB_DEPTH-1];
@@ -146,7 +146,7 @@ module tb_axi;
     end
   endfunction
 
-  // 参考内存更新（与 BFM 同一套 seed 生成，掩码与写入一致）
+  // Reference-memory update (same seed generation as the BFM; masking matches the writes)
   task automatic sb_write(
     input [`AXI_ADDR_W-1:0] addr,
     input [1:0] burst,
@@ -159,7 +159,7 @@ module tb_axi;
     integer s;
     begin
       s = slave_of(addr);
-      if (s >= 0) begin   // DECERR 区无内存
+      if (s >= 0) begin   // the DECERR region has no memory
         for (int b = 0; b <= len; b++) begin
           reg [`AXI_ADDR_W-1:0] a;
           reg [`AXI_DATA_W-1:0] d;
@@ -174,8 +174,8 @@ module tb_axi;
     end
   endtask
 
-  // 参考内存与 slave 内存逐字节比对。
-  // 注意：iverilog 层级引用的 generate 索引必须为常量，slave 循环显式展开
+  // Byte-by-byte comparison of the reference memory against the slave memories.
+  // Note: iverilog hierarchical references need constant generate indices, so the slave loop is unrolled explicitly
   task automatic sb_compare();
     begin
       for (int i = 0; i < 4096; i++) begin
@@ -201,10 +201,10 @@ module tb_axi;
   endtask
 
   //--------------------------------------------------------------------------
-  // 监视器：AW 握手计数 + 仲裁策略不变量
-  //   arb_cnt[m]：双方请求同时激活（slave0）时的竞争握手归属计数
-  //     RR 下应严格交替（|diff|<=2）；FIXED 下 m1 永远不该赢
-  //   arb_viol ：FIXED 下授权发给 m1 的瞬间 m0 请求激活 → 违例
+  // Monitors: AW handshake counts + arbitration-policy invariants
+  //   arb_cnt[m]: contended-handshake ownership count when both requests are active (slave0)
+  //     under RR it should alternate strictly (|diff|<=2); under FIXED m1 must never win
+  //   arb_viol : under FIXED, granting m1 while m0's request is active = violation
   //--------------------------------------------------------------------------
   integer aw_hs_cnt [`AXI_N_MASTER];
   integer arb_cnt [`AXI_N_MASTER];
@@ -227,14 +227,14 @@ module tb_axi;
             (slave_of(s_awaddr[m*`AXI_ADDR_W +: `AXI_ADDR_W]) == 0))
           aw_hs_cnt[m] = aw_hs_cnt[m] + 1;
       end
-      // 竞争握手归属（slave0：dbg 位 0=m0 请求，位 1=m1 请求）
+      // Contended-handshake ownership (slave0: dbg bit 0 = m0 request, bit 1 = m1 request)
       if (dbg_aw_req[0] && dbg_aw_req[1]) begin
         if (s_awvalid[0] && s_awready[0]) arb_cnt[0] = arb_cnt[0] + 1;
         if (s_awvalid[1] && s_awready[1]) arb_cnt[1] = arb_cnt[1] + 1;
       end
-      // 固定优先级不变量：slave0 的 AW 授权发给 m1 的瞬间，
-      // m0 的仲裁请求（已屏蔽 w_pending）不得为 1
-      // dbg 拍平位序：位 [s*N_MASTER + m] → slave0.m1 = 位 1，slave0.m0 = 位 0
+      // Fixed-priority invariant: at the moment slave0's AW grant goes to m1,
+      // m0's arbitration request (already masked by w_pending) must not be 1
+      // dbg flattened bit order: bit [s*N_MASTER + m] -> slave0.m1 = bit 1, slave0.m0 = bit 0
       if (`AXI_ARB_POLICY == 0) begin
         if (dbg_aw_grant[1] && dbg_aw_req[0] && !grant1_prev)
           arb_viol = 1;
@@ -243,7 +243,7 @@ module tb_axi;
     end
   end
 
-  // 全局超时看门狗
+  // Global timeout watchdog
   initial begin
     repeat (2000000) @(posedge clk);
     $display("FAIL: global watchdog timeout");
@@ -251,7 +251,7 @@ module tb_axi;
   end
 
   //==========================================================================
-  // S1：双主并发 INCR 读写不同 slave
+  // S1: two masters concurrently do INCR writes/reads to different slaves
   //==========================================================================
   task automatic s1();
     integer r0, r1;
@@ -278,7 +278,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S2/S3：全 master 抢 slave0 AW（按构建选策略检查）
+  // S2/S3: all masters hammer slave0's AW (policy check selected by build)
   //==========================================================================
   task automatic s2s3();
     integer r0, r1;
@@ -309,7 +309,7 @@ module tb_axi;
         chk((arb_cnt[1] - a1_b) == 0, "S2 fixed: m1 won a contended grant");
         $display("[%0t] PASS S2 (fixed)", $time);
       end else begin
-        // RR：竞争握手归属必须严格交替
+        // RR: contended-handshake ownership must alternate strictly
         begin
           integer d0, d1, d;
           d0 = arb_cnt[0] - a0_b;
@@ -325,25 +325,25 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S4：同 master 2 读 2 slave，slave1 先回（乱序响应）
+  // S4: one master reads 2 slaves; slave1 responds first (out-of-order responses)
   //==========================================================================
   task automatic s4();
     integer r;
     begin
-      // 先写好数据
+      // Write the data first
       g_mst[0].bfm.write(32'h0000_0300, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd0, 300, 0, 0, r);
       chk(r == 0, "S4 wr0");
       g_mst[0].bfm.write(32'h1000_0400, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd1, 310, 0, 0, r);
       chk(r == 0, "S4 wr1");
       sb_write(32'h0000_0300, `AXI_BURST_INCR, 3'd2, 8'd3, 300, 0, 0);
       sb_write(32'h1000_0400, `AXI_BURST_INCR, 3'd2, 8'd3, 310, 0, 0);
-      // slave0 慢（10 拍），slave1 快（1 拍）→ slave1 的 R 先到
+      // slave0 is slow (10 cycles), slave1 fast (1 cycle) -> slave1's R arrives first
       cfg_r_delay[0] = 8'd10;
       cfg_r_delay[1] = 8'd1;
       g_mst[0].bfm.ar_only(32'h0000_0300, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd0, 300, 0, 0, 0, 0);
       g_mst[0].bfm.ar_only(32'h1000_0400, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd1, 310, 0, 0, 0, 0);
       g_mst[0].bfm.collect_all(0, 0);
-      // 完成顺序：槽 1（slave1/id1）先于槽 0（slave0/id0）
+      // Completion order: slot 1 (slave1/id1) before slot 0 (slave0/id0)
       chk(g_mst[0].bfm.ar_done_order[0] == 1 &&
           g_mst[0].bfm.ar_done_order[1] == 0, "S4 out-of-order completion");
       cfg_r_delay[0] = 8'd2;
@@ -354,7 +354,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S5：WRAP 突发非对齐读写（起点 0x224，4 拍 × 4B，回卷边界 0x220）
+  // S5: WRAP burst unaligned write/read (start 0x224, 4 beats x 4B, wrap boundary 0x220)
   //==========================================================================
   task automatic s5();
     integer r;
@@ -370,7 +370,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S6：窄传输随机 WSTRB（含全 0 拍）
+  // S6: narrow transfers with random WSTRB (including all-zero beats)
   //==========================================================================
   task automatic s6();
     integer r;
@@ -386,7 +386,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S7：DECERR 读写
+  // S7: DECERR write/read
   //==========================================================================
   task automatic s7();
     integer r;
@@ -400,7 +400,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S8：W 通道交错 —— 两 master 先后获 AW 授权，m1 提前置 WVALID 而 m0 停摆
+  // S8: W-channel interleaving - two masters get AW grants back to back; m1 drives WVALID early while m0 stalls
   //==========================================================================
   task automatic s8();
     integer r0, r1;
@@ -411,11 +411,11 @@ module tb_axi;
       sb_write(32'h0000_0700, `AXI_BURST_INCR, 3'd2, 8'd1, 810, 0, 0);
       fork
         begin
-          // m1 提前驱动 W 数据（wready 被互联挡住，直到 m0 流完成）
+          // m1 drives W data early (wready is blocked by the interconnect until m0's stream completes)
           g_mst[1].bfm.w_only(810, 0, 0);
         end
         begin
-          repeat (10) @(posedge clk);   // m0 停摆 10 拍
+          repeat (10) @(posedge clk);   // m0 stalls for 10 cycles
           g_mst[0].bfm.w_only(800, 0, 0);
         end
       join
@@ -423,7 +423,7 @@ module tb_axi;
       chk(r0 == 0, "S8 m0 B resp");
       g_mst[1].bfm.wait_b(4'd1, r1);
       chk(r1 == 0, "S8 m1 B resp");
-      // W 流顺序：m0 的 WLAST 必须早于 m1 的首拍握手
+      // W stream order: m0's WLAST must precede m1's first-beat handshake
       chk(g_mst[0].bfm.w_done_time < g_mst[1].bfm.w_first_hs_time,
           "S8 W stream order");
       sb_compare();
@@ -432,7 +432,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S9：DECERR 3 条 outstanding AR（FIFO 顺序响应）
+  // S9: 3 outstanding ARs to DECERR (FIFO-order responses)
   //==========================================================================
   task automatic s9();
     begin
@@ -448,7 +448,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S10：双主随机混合流量 + DECERR 点缀
+  // S10: two-master random mixed traffic + sprinkled DECERR
   //==========================================================================
   task automatic s10(input integer tseed);
     integer r;
@@ -460,7 +460,7 @@ module tb_axi;
             seed = 2000 + i;
             ur   = tseed + i;
             op   = $urandom(ur) % 10;
-            // 写（读回自检的期望数据源）
+            // Write (the expected-data source for read-back self-checks)
             begin
               integer mode;
               mode = (i % 3 == 0) ? 1 : 0;
@@ -508,7 +508,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S11：随机到达间隔抢同一 slave（策略不变量/公平性）
+  // S11: random arrival intervals hammering one slave (policy invariant/fairness)
   //==========================================================================
   task automatic s11(input integer tseed);
     integer r;
@@ -525,7 +525,7 @@ module tb_axi;
         ur = tseed + 6000 + i;
         d  = $urandom(ur) % 5;
         repeat (d) @(posedge clk);
-        // 层级引用索引必须为常量（iverilog），显式展开
+        // Hierarchical-reference indices must be constant (iverilog); unroll explicitly
         if (m == 0)
           g_mst[0].bfm.write(32'h0000_0C00 + 4*i, `AXI_BURST_INCR, 3'd2, 8'd0, 0, 5000+i, 0, 0, r);
         else
@@ -551,12 +551,12 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S12：DECERR 多拍写 + 另一 master 真实写并行（slave W 背压）
+  // S12: multi-beat DECERR write in parallel with another master's real write (slave W backpressure)
   //==========================================================================
   task automatic s12();
     integer r0, r1;
     begin
-      cfg_w_rdy_pct[0] = 7'd50;   // slave0 写背压 50%
+      cfg_w_rdy_pct[0] = 7'd50;   // slave0 write backpressure 50%
       fork
         begin
           g_mst[0].bfm.write(32'h8000_0200, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd0, 900, 0, 0, r0);
@@ -575,20 +575,20 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S13：两 slave 同拍 BVALID 竞争同一 master 的 B 仲裁
+  // S13: two slaves assert BVALID in the same cycle, contending for one master's B arbitration
   //==========================================================================
   task automatic s13();
     integer r0, r1;
     begin
-      // 写 1 → slave0；B1 置起后 bready 保持 0（挂起）
+      // Write 1 -> slave0; after B1 asserts, bready stays 0 (pending)
       g_mst[0].bfm.aw_only(32'h0000_0E00, `AXI_BURST_INCR, 3'd2, 8'd1, 4'd0);
       g_mst[0].bfm.w_only(1000, 0, 0);
-      // 写 2 → slave1（WLAST 完成即可发新 AW；B1 仍挂起）
+      // Write 2 -> slave1 (a new AW is allowed once WLAST completes; B1 still pending)
       g_mst[0].bfm.aw_only(32'h1000_0F00, `AXI_BURST_INCR, 3'd2, 8'd1, 4'd1);
       g_mst[0].bfm.w_only(1010, 0, 0);
       sb_write(32'h0000_0E00, `AXI_BURST_INCR, 3'd2, 8'd1, 1000, 0, 0);
       sb_write(32'h1000_0F00, `AXI_BURST_INCR, 3'd2, 8'd1, 1010, 0, 0);
-      // 等 B2 置起：两个 BVALID 同时挂起
+      // Wait for B2 to assert: two BVALIDs pending at once
       repeat (20) @(posedge clk);
       chk(m_bvalid[0] && m_bvalid[1], "S13 both BVALID pending");
       g_mst[0].bfm.wait_b(4'd0, r0);
@@ -600,7 +600,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S14：RREADY 停摆下 R 授权锁持有（无死锁）
+  // S14: R grant lock held while RREADY stalls (no deadlock)
   //==========================================================================
   task automatic s14();
     integer r;
@@ -611,12 +611,12 @@ module tb_axi;
       chk(r == 0, "S14 wr1");
       sb_write(32'h0000_0080, `AXI_BURST_INCR, 3'd2, 8'd7, 1100, 0, 0);
       sb_write(32'h1000_0090, `AXI_BURST_INCR, 3'd2, 8'd3, 1110, 0, 0);
-      // slave0 快（先发长突发），slave1 慢（中途挂起等待）
+      // slave0 fast (long burst first), slave1 slow (waits mid-way)
       cfg_r_delay[0] = 8'd1;
       cfg_r_delay[1] = 8'd5;
       g_mst[0].bfm.ar_only(32'h0000_0080, `AXI_BURST_INCR, 3'd2, 8'd7, 4'd0, 1100, 0, 0, 0, 0);
       g_mst[0].bfm.ar_only(32'h1000_0090, `AXI_BURST_INCR, 3'd2, 8'd3, 4'd1, 1110, 0, 0, 0, 0);
-      // 收 1 拍后停摆 100 拍，再继续收完两笔
+      // Stall for 100 cycles after 1 beat, then collect both bursts
       g_mst[0].bfm.collect_all(1, 100);
       cfg_r_delay[0] = 8'd2;
       cfg_r_delay[1] = 8'd2;
@@ -626,7 +626,7 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // S15：单 master 多 ID 并发读写
+  // S15: single master with multiple concurrent IDs
   //==========================================================================
   task automatic s15();
     integer r;
@@ -637,7 +637,7 @@ module tb_axi;
       chk(r == 0, "S15 wr1");
       sb_write(32'h0000_0040, `AXI_BURST_INCR, 3'd2, 8'd1, 1200, 0, 0);
       sb_write(32'h1000_0050, `AXI_BURST_INCR, 3'd2, 8'd1, 1210, 0, 0);
-      // 读用不同 ID 并发（id3 / id7）
+      // Reads use different concurrent IDs (id3 / id7)
       g_mst[0].bfm.ar_only(32'h0000_0040, `AXI_BURST_INCR, 3'd2, 8'd1, 4'd3, 1200, 0, 0, 0, 0);
       g_mst[0].bfm.ar_only(32'h1000_0050, `AXI_BURST_INCR, 3'd2, 8'd1, 4'd7, 1210, 0, 0, 0, 0);
       g_mst[0].bfm.collect_all(0, 0);
@@ -648,13 +648,13 @@ module tb_axi;
   endtask
 
   //==========================================================================
-  // 主流程
+  // Main flow
   //==========================================================================
   initial begin
     integer tseed;
     $display("=== AXI4 Interconnect TB ===");
     $display("POLICY=%0d RESP_POLICY=%0d", `AXI_ARB_POLICY, `AXI_RESP_POLICY);
-    // slave 默认配置
+    // Slave default config
     for (int i = 0; i < `AXI_M_SLAVE; i++) begin
       cfg_aw_rdy_pct[i] = 7'd100;
       cfg_w_rdy_pct[i]  = 7'd100;

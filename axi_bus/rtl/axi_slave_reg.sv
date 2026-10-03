@@ -1,20 +1,26 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_slave_reg — 可综合阻塞式寄存器外设 AXI4 slave（reference design）
+// axi_slave_reg - synthesizable blocking register-peripheral AXI4 slave (reference design)
 //
-// 典型外设风格，与 axi_slave_ram / axi_slave_lat（流水式队列）互补：
-//   - 单事务阻塞：读写共用 busy，AW/AR 仅空闲时接收（AW 与 AR 同拍竞争
-//     时 AW 优先），上一笔完成才接下一笔——考验互联的授权锁与背压
-//   - 32b 寄存器堆（N_REG 个），WSTRB 字节使能部分写（读改写合并）
-//   - 支持多拍突发（拍地址逐拍递增，INCR/WRAP/FIXED 均按 axi_beat_addr）
-//   - B/R 无额外延迟；BID/RID 原样回显加宽后的 ID
-//   - 组合调试读口（TB 校验寄存器内容）
+// Typical peripheral style; complements axi_slave_ram / axi_slave_lat
+// (pipelined queues):
+//   - single-transaction blocking: write and read share busy; AW/AR are
+//     accepted only when idle (AW wins when competing with AR in the same
+//     cycle); the next transaction is accepted only after the previous one
+//     completes - exercises the interconnect's grant lock and backpressure
+//   - 32-bit register file (N_REG entries), WSTRB byte-enable partial writes
+//     (read-modify-write merge)
+//   - supports multi-beat bursts (beat addresses advance per beat; INCR/WRAP/
+//     FIXED all follow axi_beat_addr)
+//   - no extra B/R latency; BID/RID echo the widened ID as received
+//   - combinational debug read port (TB register checking)
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// Port style: flat packed vectors (iverilog-compatible subset), fully
+// synthesizable.
 //------------------------------------------------------------------------------
 module axi_slave_reg #(
   parameter int SLV_ID = 0,
-  parameter int N_REG  = 64     // 32b 寄存器数，2 的幂
+  parameter int N_REG  = 64     // number of 32b registers, power of 2
 ) (
   input  wire clk,
   input  wire rstn,
@@ -52,16 +58,16 @@ module axi_slave_reg #(
   output wire [1:0]               rresp,
   output wire rlast,
   input  wire rready,
-  // ---- 调试读口（TB 校验寄存器）----
+  // ---- Debug read port (TB register checking) ----
   input  wire [$clog2(N_REG)-1:0] dbg_sel,
   output wire [`AXI_DATA_W-1:0]   dbg_val
 );
 
-  localparam IDX_W = $clog2(N_REG) + 2;   // 字节地址窗口宽度
+  localparam IDX_W = $clog2(N_REG) + 2;   // byte-address window width
 
   reg [`AXI_DATA_W-1:0] regs [0:N_REG-1];
 
-  // ---- 事务寄存器 ----
+  // ---- Transaction registers ----
   reg [`AXI_SLV_ID_W-1:0] aw_id_q;
   reg [`AXI_ADDR_W-1:0]   aw_addr_q;
   reg [7:0]               aw_len_q;
@@ -78,12 +84,12 @@ module axi_slave_reg #(
   reg [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
   reg [`AXI_DATA_W-1:0]   w_merged;
 
-  // ---- FSM ----
+  // ---- FSMs ----
   localparam W_IDLE = 2'd0, W_AW = 2'd1, W_DATA = 2'd2, W_B = 2'd3;
   localparam R_IDLE = 2'd0, R_AR = 2'd1, R_DATA = 2'd2;
   reg [1:0] w_state, r_state;
 
-  // 读写共用 busy：AW 与 AR 同拍竞争时 AW 优先
+  // Write and read share busy: AW wins when competing with AR in the same cycle
   assign awready = (w_state == W_IDLE) && (r_state == R_IDLE);
   assign arready = (r_state == R_IDLE) && (w_state == W_IDLE) && !awvalid;
   assign wready  = (w_state == W_DATA);
@@ -102,7 +108,7 @@ module axi_slave_reg #(
   end
 
   //==========================================================================
-  // 单一 always_ff：写 FSM（含寄存器写）+ 读 FSM
+  // Single always_ff: write FSM (incl. register writes) + read FSM
   //==========================================================================
   always_ff @(posedge clk or negedge rstn) begin
     if (!rstn) begin
@@ -113,7 +119,7 @@ module axi_slave_reg #(
       w_beat_q <= 8'd0;
       r_beat_q <= 8'd0;
     end else begin
-      // ---- 写 FSM ----
+      // ---- Write FSM ----
       case (w_state)
         W_IDLE: if (awvalid && awready) begin
                   aw_id_q    <= awid;
@@ -125,7 +131,8 @@ module axi_slave_reg #(
                   w_state    <= W_DATA;
                 end
         W_DATA: if (wvalid && wready) begin
-                  // 读改写合并字节使能（先读旧值，合并后整字写回）
+                  // Read-modify-write merge for byte enables (read the old
+                  // value first, merge, then write the whole word back)
                   w_merged = regs[w_addr_c[IDX_W-1:2]];
                   for (int i = 0; i < `AXI_DATA_W/8; i++)
                     if (wstrb[i]) w_merged[8*i +: 8] = wdata[8*i +: 8];
@@ -136,7 +143,7 @@ module axi_slave_reg #(
         W_B:   if (bvalid && bready) w_state <= W_IDLE;
         default: w_state <= W_IDLE;
       endcase
-      // ---- 读 FSM ----
+      // ---- Read FSM ----
       case (r_state)
         R_IDLE: if (arvalid && arready) begin
                   ar_id_q    <= arid;
@@ -156,7 +163,7 @@ module axi_slave_reg #(
     end
   end
 
-  // ---- 调试读口 ----
+  // ---- Debug read port ----
   assign dbg_val = regs[dbg_sel];
 
 endmodule

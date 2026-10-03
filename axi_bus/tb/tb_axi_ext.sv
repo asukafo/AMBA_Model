@@ -1,36 +1,36 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// tb_axi_ext — 互斥访问 + LFSR 流量 RTL 级联调：
-//   master0 = axi_master_excl（ARLOCK/AWLOCK 互斥事务，检查 EXOKAY）
-//   master1 = axi_master_lfsr（LFSR 随机流量 soak 源）
-//   slave0  = axi_slave_ram（带互斥监视器）
+// tb_axi_ext - exclusive-access + LFSR-traffic RTL-level co-verification:
+//   master0 = axi_master_excl (ARLOCK/AWLOCK exclusive transactions, checks EXOKAY)
+//   master1 = axi_master_lfsr (LFSR random-traffic soak source)
+//   slave0  = axi_slave_ram (with exclusive monitor)
 //   slave1  = axi_slave_lat
 //
-// 检查手段：excl 的 rd/wr 响应码与 wr_issued；lfsr 的完成计数、
-// resp_err、读校验和（TB 在每笔读发出时按参考内存快照累加期望值——
-// 单 outstanding 下发出时 == 读出时）；参考内存逐字节比对。
+// Checks: excl's rd/wr response codes and wr_issued; lfsr's completion
+// count, resp_err, read checksum (the TB accumulates the expectation from a
+// reference-memory snapshot at each read-issue time - with a single
 //
-// 场景：
-//   E1 互斥成功路径（读 EXOKAY → 条件写 EXOKAY）
-//   E2 互斥丢失（读与写之间被另一 master 普通写打断 → 写回 OKAY）
-//   E3 LFSR soak（两个地址窗口各 60 笔，校验和与内存比对）
-//   E4 互斥 + LFSR 并发
+// outstanding transaction, issue time == read time); byte-by-byte reference
+// memory comparison.
+// Scenarios:
+//   E1 exclusive success path (read EXOKAY -> conditional write EXOKAY)
+//   E2 exclusive lost (a normal write from another master lands between read and
 //------------------------------------------------------------------------------
 module tb_axi_ext;
   timeunit 1ns / 1ps;
 
   localparam MAX_WAIT = 200000;
 
-  // ---- 时钟 / 复位 ----
+//     write -> write gets OKAY)
   reg clk;
   reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
-  // ---- 互联连线 + DUT（共用）----
+//   E3 LFSR soak (60 transactions per address window, checksum and memory comparison)
   `include "tb_axi_wires.svh"
 
-  // ---- master0（excl）配置 ----
+//   E4 exclusive + LFSR concurrency
   reg excl_start;
   reg [`AXI_ADDR_W-1:0] excl_addr;
   reg [7:0] excl_len;
@@ -40,7 +40,7 @@ module tb_axi_ext;
   reg [`AXI_DATA_W-1:0] excl_wdata0;
   reg [7:0] excl_wr_delay;
 
-  // ---- master1（lfsr）配置 ----
+  // ---- Clock / reset ----
   reg lfsr_enable;
   reg [15:0] lfsr_tx_max;
   reg [`AXI_ADDR_W-1:0] lfsr_base;
@@ -136,12 +136,12 @@ module tb_axi_ext;
     .gen_cnt (lfsr_gen_cnt)
   );
 
-  // ---- 直通属性：master1（lfsr）lock 恒 0；excl 驱动 master0 的 lock ----
+  // ---- Interconnect wires + DUT (shared) ----
   assign s_awlock[1*2]    = 1'b0;
   assign s_awlock[1*2+1]  = 1'b0;
   assign s_arlock[1*2]    = 1'b0;
   assign s_arlock[1*2+1]  = 1'b0;
-  assign s_awlock[0*2+1]  = 1'b0;   // excl 只驱动 bit0
+  // ---- master0 (excl) config ----
   assign s_arlock[0*2+1]  = 1'b0;
   assign s_awcache = '0;
   assign s_awprot = '0;
@@ -152,7 +152,7 @@ module tb_axi_ext;
   assign s_arqos = '0;
   assign s_arregion = '0;
 
-  // ---- slave0：ram（互斥监视器）----
+  // ---- master1 (lfsr) config ----
   axi_slave_ram #(
     .SLV_ID (0)
   ) slv0 (
@@ -241,7 +241,7 @@ module tb_axi_ext;
   reg [7:0] lat_err_period;
 
   //--------------------------------------------------------------------------
-  // 参考内存
+  // ---- Pass-through attributes: master1 (lfsr) locks are always 0; excl drives master0's lock ----
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
   reg [7:0] ref_mem [0:SB_DEPTH-1];
@@ -309,7 +309,7 @@ module tb_axi_ext;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动：excl master
+  assign s_awlock[0*2+1]  = 1'b0;   // excl drives bit 0 only
   //--------------------------------------------------------------------------
   task automatic excl_run(input [`AXI_ADDR_W-1:0] addr,
                           input [7:0] len, input [2:0] size,
@@ -339,7 +339,7 @@ module tb_axi_ext;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动：lfsr master
+  // ---- slave0: ram (exclusive monitor) ----
   //--------------------------------------------------------------------------
   task automatic lfsr_run(input [15:0] tx_max,
                           input [`AXI_ADDR_W-1:0] base,
@@ -354,7 +354,7 @@ module tb_axi_ext;
       @(negedge clk);
       lfsr_enable = 1'b1;
       cnt = 0;
-      // 上一批的 done 可能仍挂着：先等它清零（本批启动），再等完成置位
+  // Reference memory
       while (mst1.done) begin
         @(posedge clk);
         cnt = cnt + 1;
@@ -371,10 +371,10 @@ module tb_axi_ext;
     end
   endtask
 
-  // 找"首笔为写"的种子用（lfsr 首笔参数直接取 cfg_seed 本身）
+  // Driver: excl master
 
   //==========================================================================
-  // E1：互斥成功路径
+  // Driver: lfsr master
   //==========================================================================
   task automatic e1();
     begin
@@ -389,17 +389,17 @@ module tb_axi_ext;
   endtask
 
   //==========================================================================
-  // E2：互斥丢失（读写之间被另一 master 普通写打断 → 写回 OKAY）
+      // The previous batch's done may still be asserted: first wait for it to
   //==========================================================================
   task automatic e2();
     reg [31:0] seed;
     begin
-      // 找一个 bit0=0（首笔为写）的种子；首笔参数直接取 seed：
+      // clear (this batch starts), then wait for it to assert (completion)
       // dir=seed[0]、len=seed[7:5]、wdata0=seed
       seed = 32'd1;
       while (seed[0] != 1'b0)
         seed = seed + 32'd1;
-      // 干扰写：单笔写 slave0（普通写清除监视点）
+  // Helper for finding a "first transaction is a write" seed (the lfsr's first
       fork
         begin
           excl_run(32'h0000_0200, 8'd1, 3'd2, `AXI_BURST_INCR, 4'd0, 32'hA200_0000, 8'd40);
@@ -424,12 +424,12 @@ module tb_axi_ext;
   endtask
 
   //==========================================================================
-  // E3：LFSR soak（两个窗口各 60 笔）
+  // transaction parameters are taken from cfg_seed itself)
   //==========================================================================
   reg [`AXI_DATA_W-1:0] exp_acc;
   initial exp_acc = '0;
 
-  // 读事务发出时按参考内存快照累加期望校验和（单 outstanding：发出时==读出时）
+  // E1: exclusive success path
   always @(posedge clk) begin
     if (lfsr_enable && mst1.tx_vld && mst1.tx_dir) begin
       for (int b = 0; b <= mst1.tx_len; b++) begin
@@ -446,7 +446,7 @@ module tb_axi_ext;
         end
       end
     end
-    // 写事务发出时更新参考内存
+  // E2: exclusive lost (a normal write from another master lands between the
     if (lfsr_enable && mst1.tx_vld && !mst1.tx_dir) begin
       ref_update(mst1.tx_addr, `AXI_BURST_INCR, 3'd2, mst1.tx_len, mst1.tx_wdata0);
     end
@@ -471,7 +471,7 @@ module tb_axi_ext;
   endtask
 
   //==========================================================================
-  // E4：互斥 + LFSR 并发（不同 slave）
+  // exclusive read and write -> the write gets OKAY)
   //==========================================================================
   task automatic e4();
     begin
@@ -496,7 +496,7 @@ module tb_axi_ext;
   endtask
 
   //--------------------------------------------------------------------------
-  // 主流程
+      // Find a seed with bit0=0 (first transaction is a write); first-transaction
   //--------------------------------------------------------------------------
   initial begin
     $display("=== AXI4 Interconnect Exclusive + LFSR TB ===");
@@ -525,7 +525,7 @@ module tb_axi_ext;
     $finish;
   end
 
-  // 全局超时看门狗
+      // parameters are taken from the seed itself:
   initial begin
     repeat (2000000) @(posedge clk);
     $display("FAIL: global watchdog timeout");

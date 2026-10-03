@@ -1,51 +1,55 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_decerr — 内部 DECERR 响应器（互联里每 master 一份），扁平端口
+// axi_decerr - internal DECERR responder (one per master in the
+// interconnect), flat ports
 //
-// 写：IDLE -> DRAIN -> BRESP 三段 FSM
-//   IDLE   收未命中的 AW（awready=1）
-//   DRAIN  无条件 wready=1 吞 W 拍（w_drain_done 在 WLAST 握手拍脉冲，
-//          互联用它清 w_pending）
-//   BRESP  bvalid=1，b_id=aw_id，b_resp=DECERR，等 bready
-//   AXI 要求 B 必须在 WLAST 之后，FSM 天然保证。
+// Write path: 3-state FSM IDLE -> DRAIN -> BRESP
+//   IDLE   accepts an unmatched AW (awready=1)
+//   DRAIN  drains W beats with wready=1 unconditionally (w_drain_done
+//          pulses on the WLAST handshake; the interconnect uses it to
+//          clear w_pending)
+//   BRESP  bvalid=1, b_id=aw_id, b_resp=DECERR, waits for bready
+//   AXI requires B after WLAST; the FSM guarantees this naturally.
 //
-// 读：AR ID FIFO（复用 axi_owner_fifo），每笔回一拍 R=DECERR、RLAST=1。
+// Read path: an AR ID FIFO (reuses axi_owner_fifo); each transaction gets
+// one beat of R=DECERR with RLAST=1.
 //
-// 与 W mux 的互斥由互联的"每 master 至多一条在途写流"规则保证：
-// 本模块处于 DRAIN 时，该 master 的 W 拍不可能同时被某个 slave 的
-// W mux 选中（w_pending 置位期间 AW 仲裁请求被屏蔽）。
+// Mutual exclusion with the W mux is guaranteed by the interconnect's
+// "one in-flight write data stream per master" rule: while this module is
+// in DRAIN, that master's W beats can never be selected by any slave's
+// W mux (AW arbitration requests are masked while w_pending is set).
 //------------------------------------------------------------------------------
 module axi_decerr #(
   parameter int AR_Q_DEPTH = `AXI_DECERR_Q
 ) (
   input  wire                  clk,
   input  wire                  rstn,
-  // 写地址（互联已把 awvalid 门控为 未命中 && !w_pending）
+  // Write address (interconnect already gates awvalid with unmatched && !w_pending)
   input  wire                  awvalid,
   input  wire [`AXI_ID_W-1:0]  aw_id,
   output wire                  awready,
-  // 写数据（直接从 master 的 W 通道吞拍，只看 valid/last）
+  // Write data (drained directly from the master's W channel; only valid/last matter)
   input  wire                  wvalid,
   input  wire                  w_last,
   output wire                  wready,
   output wire                  w_drain_done,
-  // 写响应
+  // Write response
   output wire                  bvalid,
   output wire [`AXI_ID_W-1:0]  b_id,
   output wire [1:0]            b_resp,
   input  wire                  bready,
-  // 读地址（互联已把 arvalid 门控为未命中）
+  // Read address (interconnect already gates arvalid with unmatched)
   input  wire                  arvalid,
   input  wire [`AXI_ID_W-1:0]  ar_id,
   output wire                  arready,
-  // 读数据（单拍，DECERR，RLAST=1）
+  // Read data (single beat, DECERR, RLAST=1)
   output wire                  rvalid,
   output wire [`AXI_ID_W-1:0]  r_id,
   output wire [1:0]            r_resp,
   input  wire                  rready
 );
 
-  // ---- 写路径 FSM ----
+  // ---- Write-path FSM ----
   localparam W_IDLE = 2'd0, W_DRAIN = 2'd1, W_BRESP = 2'd2;
   reg [1:0]           wstate;
   reg [`AXI_ID_W-1:0] aw_id_q;
@@ -83,7 +87,7 @@ module axi_decerr #(
     end
   end
 
-  // ---- 读路径：AR ID FIFO，每笔回一拍 DECERR ----
+  // ---- Read path: AR ID FIFO, one DECERR beat per transaction ----
   wire                 rf_empty, rf_full;
   wire [`AXI_ID_W-1:0] rf_head;
 

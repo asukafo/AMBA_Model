@@ -1,16 +1,16 @@
 `timescale 1ns/1ps
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_master_bfm — 任务级 master BFM（扁平端口，iverilog 兼容子集）
+// axi_master_bfm - task-level master BFM (flat ports, iverilog-compatible subset)
 //
-// 驱动时序：negedge 驱动，posedge 采样握手。VALID 保持到 READY。
+// Drive timing: drive at negedge, sample handshakes at posedge. VALID is held until READY.
 //
-// 写模型：至多一条在途写（与互联 w_pending 规则一致），拆分相位任务
-//   aw_only / w_only / wait_b 支撑 W 交错与 B 竞争场景。
-// 读模型：outstanding 读表（8 槽），ar_only + collect_all；按 RID 分拣，
-//   数据自检（期望值由 seed 确定性生成，见 axi_defs.svh）。
+// Write model: at most one in-flight write (consistent with the interconnect's
+// w_pending rule); the split-phase tasks aw_only / w_only / wait_b support
+// W-interleaving and B-contention scenarios.
+// Read model: an outstanding-read table (8 slots), ar_only + collect_all;
 //
-// 观测输出（场景通过层级引用检查）：
+// beats are dispatched by RID with data self-checking (expected values are
 //   last_resp / w_done_time / w_first_hs_time / ar_done_order /
 //   ar_recv_resp / ar_done_cnt
 //------------------------------------------------------------------------------
@@ -56,9 +56,9 @@ module axi_master_bfm #(
   output reg rready
 );
 
-  // ---- 观测信号（TB 通过层级引用 g_mst[i].bfm.<name> 访问）----
-  // 注意：iverilog 无法驱动 unpacked 数组输出端口（静默 X），
-  // 观测信号一律放内部，不做端口
+// generated deterministically from a seed, see axi_defs.svh).
+// Observability outputs (scenarios inspect them via hierarchical references):
+  // ---- Observability signals (TB accesses them via g_mst[i].bfm.<name>) ----
   reg [1:0]  last_resp;
   time       w_done_time;
   time       w_first_hs_time;
@@ -66,12 +66,12 @@ module axi_master_bfm #(
   integer    ar_recv_resp [0:7];
   integer    ar_done_cnt;
 
-  // 待发送 W 的写（至多一条，与互联 w_pending 规则一致）
+  // Note: iverilog cannot drive unpacked-array output ports (silent X);
   reg                  pw_active;
   reg [`AXI_ID_W-1:0]  pw_id;
   reg [7:0]            pw_len;
 
-  // outstanding 读表（8 槽）
+  // all observability signals are internal, not ports
   reg [7:0]              arq_active;
   reg [`AXI_ID_W-1:0]   arq_id    [0:7];
   reg [`AXI_ADDR_W-1:0] arq_addr  [0:7];
@@ -80,12 +80,11 @@ module axi_master_bfm #(
   reg [1:0]             arq_burst [0:7];
   integer               arq_seed      [0:7];
   integer               arq_strb_seed [0:7];
-  integer               arq_strb_mode [0:7];  // 0 全1 / 1 窄 / 2 全0
-  integer               arq_exp_mode  [0:7];  // 0 期望生成数据 / 1 期望 0
+  integer               arq_strb_mode [0:7];  // 0 all ones / 1 narrow / 2 all zeros
+  integer               arq_exp_mode  [0:7];  // 0 expect generated data / 1 expect zeros
   integer               arq_exp_resp  [0:7];  // 0 OKAY / 3 DECERR
-  integer               arq_beat      [0:7];  // 已收拍数
+  integer               arq_beat      [0:7];  // beats received so far
 
-  // 期望读数据：按写时的 strb 掩码合并（未写字节期望 0）
   function automatic [`AXI_DATA_W-1:0] expected_word;
     input integer slot;
     input integer beat;
@@ -105,7 +104,6 @@ module axi_master_bfm #(
   endfunction
 
   //--------------------------------------------------------------------------
-  // aw_only：发 AW，等握手，登记待发 W
   //--------------------------------------------------------------------------
   task automatic aw_only(
     input [`AXI_ADDR_W-1:0] addr,
@@ -130,7 +128,7 @@ module axi_master_bfm #(
         cnt = cnt + 1;
         if (cnt > MAX_WAIT) $fatal(1, "BFM %0d: AW timeout", MST_ID);
       end
-      // 阻塞赋值：后续 w_only 在同一时刻立即读取（避免 NBA 竞争）
+  // Expected read data: merged by the write-time strb mask (unwritten bytes expect 0)
       pw_active = 1'b1;
       pw_id     = id;
       pw_len    = len;
@@ -145,7 +143,7 @@ module axi_master_bfm #(
   endtask
 
   //--------------------------------------------------------------------------
-  // w_only：为 pw_active 的写发送 W 拍（数据由 seed 生成）
+  // aw_only: drive AW, wait for the handshake, register the pending W
   //--------------------------------------------------------------------------
   task automatic w_only(input integer seed,
                         input integer strb_seed,
@@ -173,13 +171,13 @@ module axi_master_bfm #(
       wdata  <= '0;
       wstrb  <= '0;
       wlast  <= 1'b0;
-      // 阻塞赋值：后续 aw_only 在同一时刻立即读取
+      // Blocking assignment: the following w_only reads it immediately in the same timestep (avoids NBA races)
       pw_active = 1'b0;
     end
   endtask
 
   //--------------------------------------------------------------------------
-  // wait_b：等 B 响应，核对 ID，返回 resp
+  // w_only: send the W beats for the pending write (data generated from a seed)
   //--------------------------------------------------------------------------
   task automatic wait_b(input [`AXI_ID_W-1:0] exp_id,
                         output integer resp);
@@ -203,7 +201,7 @@ module axi_master_bfm #(
   endtask
 
   //--------------------------------------------------------------------------
-  // write：完整写事务（aw_only + w_only + wait_b）
+      // Blocking assignment: the following aw_only reads it immediately
   //--------------------------------------------------------------------------
   task automatic write(
     input [`AXI_ADDR_W-1:0] addr,
@@ -224,7 +222,7 @@ module axi_master_bfm #(
   endtask
 
   //--------------------------------------------------------------------------
-  // ar_only：发 AR，等握手，登记 outstanding 读表
+  // wait_b: wait for the B response, check the ID, return resp
   //--------------------------------------------------------------------------
   task automatic ar_only(
     input [`AXI_ADDR_W-1:0] addr,
@@ -253,7 +251,7 @@ module axi_master_bfm #(
         cnt = cnt + 1;
         if (cnt > MAX_WAIT) $fatal(1, "BFM %0d: AR timeout", MST_ID);
       end
-      // 找空槽
+  // write: complete write transaction (aw_only + w_only + wait_b)
       slot = -1;
       begin
         integer fnd;
@@ -285,9 +283,9 @@ module axi_master_bfm #(
   endtask
 
   //--------------------------------------------------------------------------
-  // collect_all：收 R 直到所有 outstanding 读完成。
-  //   stall_after > 0 时，在收满 stall_after 拍后停摆 rready stall_cycles 拍
-  //   （测授权锁持有与死锁，S14）
+  // ar_only: drive AR, wait for the handshake, register in the outstanding-read table
+      // Find a free slot
+  // collect_all: receive R until all outstanding reads complete.
   //--------------------------------------------------------------------------
   task automatic collect_all(input integer stall_after,
                              input integer stall_cycles);
@@ -305,7 +303,7 @@ module axi_master_bfm #(
         cnt = cnt + 1;
         if (cnt > MAX_WAIT) $fatal(1, "BFM %0d: R timeout", MST_ID);
         if (rvalid && rready) begin
-          // 按 RID 找槽
+  //   when stall_after > 0, hold rready low for stall_cycles cycles after
           slot = -1;
           begin
             integer fnd;
@@ -318,7 +316,7 @@ module axi_master_bfm #(
           end
           if (slot < 0)
             $fatal(1, "BFM %0d: unexpected RID %0h", MST_ID, rid);
-          // 数据自检
+  //   collecting stall_after beats (tests grant-lock holding and deadlock, S14)
           if (arq_exp_mode[slot] == 0) begin
             if (rdata !== expected_word(slot, arq_beat[slot])) begin
               $display("[%0t] BFM%0d mismatch slot=%0d beat=%0d rdata=%0h exp=%0h addr=%0h",
@@ -334,7 +332,7 @@ module axi_master_bfm #(
             if (rdata !== '0)
               $fatal(1, "BFM %0d: R data not zero (slot %0d)", MST_ID, slot);
           end
-          // 收满 stall_after 拍后停摆一次
+          // Find the slot by RID
           beats = beats + 1;
           if (!stalled && stall_after > 0 && beats >= stall_after) begin
             stalled = 1'b1;
@@ -363,8 +361,8 @@ module axi_master_bfm #(
   endtask
 
   //--------------------------------------------------------------------------
-  // read：单笔读（无其他 outstanding 时使用）
-  //   exp_mode 0 = 期望生成数据（seed/strb 与写入一致）；1 = 期望 0
+          // Data self-check
+          // Stall once after collecting stall_after beats
   //   exp_resp 0 = OKAY；3 = DECERR
   //--------------------------------------------------------------------------
   task automatic read(
@@ -389,7 +387,7 @@ module axi_master_bfm #(
     end
   endtask
 
-  // 复位默认值
+  // read: single read (use when no other reads are outstanding)
   initial begin
     awvalid = 1'b0; wvalid = 1'b0; bready = 1'b0;
     arvalid = 1'b0; rready = 1'b0;

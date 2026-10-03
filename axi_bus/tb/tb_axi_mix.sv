@@ -1,35 +1,35 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// tb_axi_mix — 混合拓扑 RTL 级联调：
-//   master0 = axi_master_cfg（阻塞式单事务）
-//   master1 = axi_master_pipe（流水式多 outstanding，描述符表驱动）
-//   slave0  = axi_slave_ram（流水式内存）
-//   slave1  = axi_slave_lat（高延迟 + SLVERR 注入）
+// tb_axi_mix - mixed-topology RTL-level co-verification:
+//   master0 = axi_master_cfg (blocking, single transaction)
+//   master1 = axi_master_pipe (pipelined multi-outstanding, descriptor-table driven)
+//   slave0  = axi_slave_ram (pipelined memory)
+//   slave1  = axi_slave_lat (high latency + SLVERR injection)
 //
-// 检查手段：master 状态码 / pipe 槽位响应与错误标记 / 读校验和 /
-// 参考内存逐字节比对（两 slave 调试读口）/ 超时看门狗。
+// Checks: master status codes / pipe slot responses and error flags / read
+// checksums / byte-by-byte reference-memory comparison (via both slaves'
 //
-// 场景：
-//   M1 pipe 批量流水（8 描述符读写交错、跨两 slave、唯一 ID）
-//   M2 cfg → lat slave：正常写读回 + 全 SLVERR 模式错误检查
-//   M3 并发：cfg→ram 写 同时 pipe→lat 读
-//   M4 两 master 抢 lat slave（延迟制造 B 竞争）
-//   M5 pipe 随机描述符多轮（seeded，读回自检）
+// debug read ports) / timeout watchdog.
+// Scenarios:
+//   M1 pipe batch pipelining (8 interleaved read/write descriptors across
+//     both slaves, unique IDs)
+//   M2 cfg -> lat slave: normal write/read-back + all-SLVERR-mode error checks
+//   M3 concurrency: cfg writes ram while pipe reads lat
 //------------------------------------------------------------------------------
 module tb_axi_mix;
   timeunit 1ns / 1ps;
 
   localparam MAX_WAIT = 100000;
 
-  // ---- 时钟 / 复位 ----
+//   M4 two masters hammer the lat slave (latency creates B contention)
   reg clk;
   reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
-  // ---- 互联连线 + DUT（共用）----
+//   M5 pipe random descriptor batches (seeded, read-back self-checks)
   `include "tb_axi_wires.svh"
-  // 直通属性默认 0（互斥/窄传输场景由专属 master 驱动对应位）
+  // ---- Clock / reset ----
   assign s_awlock = '0;
   assign s_awcache = '0;
   assign s_awprot = '0;
@@ -42,7 +42,7 @@ module tb_axi_mix;
   assign s_arregion = '0;
 
 
-  // ---- master0（cfg）配置（标量连线）----
+  // ---- Interconnect wires + DUT (shared) ----
   reg cfg0_wr_start, cfg0_rd_start;
   reg [`AXI_ADDR_W-1:0] cfg0_addr;
   reg [7:0] cfg0_len;
@@ -52,7 +52,7 @@ module tb_axi_mix;
   reg [`AXI_DATA_W-1:0] cfg0_wdata0;
   reg [`AXI_DATA_W/8-1:0] cfg0_wstrb;
 
-  // ---- master1（pipe）描述符连线 ----
+  // Pass-through attributes default to 0 (dedicated masters drive their bits in the exclusive/narrow scenarios)
   reg pipe_start, desc_wr;
   reg [3:0] pipe_ndesc;
   reg [$clog2(8)-1:0] desc_sel;
@@ -64,12 +64,12 @@ module tb_axi_mix;
   reg [`AXI_ID_W-1:0] desc_id;
   reg [`AXI_DATA_W-1:0] desc_wdata0;
 
-  // ---- lat slave 配置 ----
+  // ---- master0 (cfg) config (scalar wires) ----
   reg [7:0] lat_b_delay, lat_r_delay;
   reg [1:0] lat_err_mode;
   reg [7:0] lat_err_period;
 
-  // ---- 调试读口 ----
+  // ---- master1 (pipe) descriptor wires ----
   reg [`AXI_ADDR_W-1:0] dbg_addr0, dbg_addr1;
   wire [7:0] dbg_byte0_c, dbg_byte1_c;
 
@@ -250,7 +250,7 @@ module tb_axi_mix;
   );
 
   //--------------------------------------------------------------------------
-  // 参考内存
+  // ---- lat slave config ----
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
   reg [7:0] ref_mem [0:SB_DEPTH-1];
@@ -265,9 +265,10 @@ module tb_axi_mix;
     else slave_of = -1;
   endfunction
 
-  // 参考内存更新（写第 b 拍 = base + b；字节放置与 slave 的 lane 映射
-  // 完全一致：strobe lane i → 字对齐基址 + i 的字节）。
-  // use_explicit=1 时用显式 strobe（cfg master 自定义 WSTRB 场景）
+  // Reference-memory update (write beat b = base + b; byte placement matches
+  // the slaves' lane mapping exactly: strobe lane i -> byte at word-aligned
+  // base + i). When use_explicit=1 an explicit strobe is used (cfg master's
+  // custom-WSTRB scenario)
   task automatic ref_update(
     input [`AXI_ADDR_W-1:0] addr,
     input [1:0] burst,
@@ -296,7 +297,7 @@ module tb_axi_mix;
     end
   endtask
 
-  // 从 slave 调试口读一个字
+  // Read one word from a slave debug port
   task automatic dbg_word(input integer s, input [`AXI_ADDR_W-1:0] a,
                           output [`AXI_DATA_W-1:0] w);
     begin
@@ -314,7 +315,7 @@ module tb_axi_mix;
     end
   endtask
 
-  // 参考内存 vs 两 slave 调试口逐字节比对
+  // Byte-by-byte comparison of the reference memory against both slave debug ports
   task automatic mem_compare();
     begin
       for (int s = 0; s < `AXI_M_SLAVE; s++) begin
@@ -334,7 +335,7 @@ module tb_axi_mix;
     end
   endtask
 
-  // 期望校验和（读返回字 = 字对齐基址 + lane，与 slave 的 lane 映射一致）
+  // custom-WSTRB scenario)
   task automatic exp_checksum(
     input [`AXI_ADDR_W-1:0] addr,
     input [1:0] burst, input [2:0] size, input [7:0] len,
@@ -369,7 +370,7 @@ module tb_axi_mix;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动：cfg master 写/读（master0）
+  // Read one word from a slave debug port
   //--------------------------------------------------------------------------
   task automatic mst0_wr(input [`AXI_ADDR_W-1:0] addr,
                          input [7:0] len, input [2:0] size,
@@ -427,7 +428,7 @@ module tb_axi_mix;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动：pipe master（master1）
+  // Byte-by-byte comparison of the reference memory against both slave debug ports
   //--------------------------------------------------------------------------
   task automatic desc_put(input integer sel, input dir,
                           input [`AXI_ADDR_W-1:0] addr,
@@ -435,7 +436,7 @@ module tb_axi_mix;
                           input [1:0] burst, input [`AXI_ID_W-1:0] id,
                           input [`AXI_DATA_W-1:0] base);
     begin
-      desc_sel    = sel;   // 隐式截断（int 部分选择有 iverilog elab bug）
+      desc_sel    = sel;   // implicit truncation (int part-selects have an iverilog elab bug)
       desc_dir    = dir;
       desc_addr   = addr;
       desc_len    = len;
@@ -471,10 +472,10 @@ module tb_axi_mix;
   endtask
 
   //==========================================================================
-  // 场景
+  // with the slaves' lane mapping)
   //==========================================================================
 
-  // M1：pipe 批量流水（8 描述符读写交错、跨两 slave、唯一 ID）
+  // Driver: cfg master write/read (master0)
   task automatic m1();
     begin
       pipe_ndesc = 8;
@@ -486,14 +487,14 @@ module tb_axi_mix;
       desc_put(5, 1'b1, 32'h0000_0600, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd5, 32'h0);
       desc_put(6, 1'b0, 32'h1000_0800, 8'd3, 3'd2, `AXI_BURST_INCR, 4'd6, 32'hD000_0000);
       desc_put(7, 1'b1, 32'h1000_0800, 8'd3, 3'd2, `AXI_BURST_INCR, 4'd7, 32'h0);
-      // 参考模型
+      // Reference model
       ref_update(32'h0000_0200, `AXI_BURST_INCR, 3'd2, 8'd3, 32'hA000_0000, 0, 0);
       ref_update(32'h1000_0400, `AXI_BURST_INCR, 3'd2, 8'd1, 32'hB000_0000, 0, 0);
       ref_update(32'h0000_0600, `AXI_BURST_INCR, 3'd2, 8'd7, 32'hC000_0000, 0, 0);
       ref_update(32'h1000_0800, `AXI_BURST_INCR, 3'd2, 8'd3, 32'hD000_0000, 0, 0);
       pipe_run();
       chk(!mst1.resp_err, "M1 resp_err");
-      // 读校验和 = 4 个读描述符的 XOR
+      // Read checksum = XOR of the 4 read descriptors
       begin
         reg [`AXI_DATA_W-1:0] echk, acc;
         reg [`AXI_DATA_W-1:0] e0, e1, e2, e3;
@@ -510,7 +511,7 @@ module tb_axi_mix;
     end
   endtask
 
-  // M2：cfg → lat slave：正常写读回 + 全 SLVERR 检查
+  // Scenarios
   task automatic m2();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk, echk;
@@ -526,7 +527,7 @@ module tb_axi_mix;
       chk(st == 0, "M2 rd status");
       exp_checksum(32'h1000_0A00, `AXI_BURST_INCR, 3'd2, 8'd3, echk);
       chk(chk === echk, "M2 checksum");
-      // 全 SLVERR 模式：写/读都返回 SLVERR（数据仍写入）
+  // M1: pipe batch pipelining (8 interleaved read/write descriptors across both
       lat_err_mode = 2'd1;
       mst0_wr(32'h1000_0C00, 8'd1, 3'd2, `AXI_BURST_INCR, 4'd0, 32'hF000_0000, st);
       chk(st == 2, "M2 wr SLVERR status");
@@ -539,11 +540,11 @@ module tb_axi_mix;
     end
   endtask
 
-  // M3：并发：cfg→ram 写 同时 pipe→lat 读
+  // slaves, unique IDs)
   task automatic m3();
     reg [1:0] st0;
     begin
-      // 先给 lat 放数据（M2 已写过 0x1000_0A00，直接读回）
+      // Reference model
       fork
         begin
           mst0_wr(32'h0000_0E00, 8'd3, 3'd2, `AXI_BURST_INCR, 4'd0, 32'h1100_0000, st0);
@@ -567,7 +568,7 @@ module tb_axi_mix;
     end
   endtask
 
-  // M4：两 master 抢 lat slave（大延迟制造 B 竞争）
+      // Read checksum = XOR of the 4 read descriptors
   task automatic m4();
     reg [1:0] st0;
     begin
@@ -596,18 +597,18 @@ module tb_axi_mix;
     end
   endtask
 
-  // M5：pipe 随机描述符多轮（先写后读，读回自检；4 写 + 4 读 = 8 条）
+  // M2: cfg -> lat slave: normal write/read-back + all-SLVERR checks
   task automatic m5(input integer tseed);
     begin
       for (int round = 0; round < 3; round++) begin
         pipe_ndesc = 8;
-        // 4 条写（唯一地址、16B 步进不重叠）+ 4 条读（读回前 4 条）
+        // 4 writes (unique addresses, 16B stride, non-overlapping) + 4 reads (read back the first 4)
         for (int i = 0; i < 4; i++) begin
           integer ur, base_i, len_i;
           reg [`AXI_ADDR_W-1:0] addr;
           ur = tseed + round*100 + i;
           base_i = 32'h1500_0000 + round*256 + i*16;
-          len_i = (tseed + i) % 4;   // 0..3 拍指数（突发 <= 16B，不重叠）
+          len_i = (tseed + i) % 4;   // 0..3 beat index (burst <= 16B, non-overlapping)
           if ((i + round) % 2 == 0) addr = 32'h0000_0C00 + round*96 + i*16;
           else addr = 32'h1000_0C00 + round*96 + i*16;
           desc_put(i, 1'b0, addr, len_i, 3'd2, `AXI_BURST_INCR,
@@ -640,16 +641,16 @@ module tb_axi_mix;
   endtask
 
   //==========================================================================
-  // M6：pipe 窄传输/非对齐（size 0/1，按 size 对齐的起址，读写交错）
+      // Seed lat's data first (M2 already wrote 0x1000_0A00; read it back)
   //==========================================================================
   task automatic m6();
     begin
       pipe_ndesc = 8;
-      // 4 条窄写 + 4 条窄读（读回前 4 条）
-      desc_put(0, 1'b0, 32'h0000_0B00, 8'd3, 3'd0, `AXI_BURST_INCR, 4'd0, 32'h1600_0000); // 字节宽 len3
-      desc_put(1, 1'b0, 32'h1000_0B02, 8'd3, 3'd1, `AXI_BURST_INCR, 4'd1, 32'h1700_0000); // 半字宽 非对齐 len3
-      desc_put(2, 1'b0, 32'h0000_0B20, 8'd1, 3'd0, `AXI_BURST_INCR, 4'd2, 32'h1800_0000); // 字节宽 len1
-      desc_put(3, 1'b0, 32'h1000_0B24, 8'd1, 3'd1, `AXI_BURST_INCR, 4'd3, 32'h1900_0000); // 半字宽 len1 非对齐
+      // 4 narrow writes + 4 narrow reads (read back the first 4)
+      desc_put(0, 1'b0, 32'h0000_0B00, 8'd3, 3'd0, `AXI_BURST_INCR, 4'd0, 32'h1600_0000); // byte-wide len3
+      desc_put(1, 1'b0, 32'h1000_0B02, 8'd3, 3'd1, `AXI_BURST_INCR, 4'd1, 32'h1700_0000); // halfword-wide unaligned len3
+      desc_put(2, 1'b0, 32'h0000_0B20, 8'd1, 3'd0, `AXI_BURST_INCR, 4'd2, 32'h1800_0000); // byte-wide len1
+      desc_put(3, 1'b0, 32'h1000_0B24, 8'd1, 3'd1, `AXI_BURST_INCR, 4'd3, 32'h1900_0000); // halfword-wide len1 unaligned
       desc_put(4, 1'b1, 32'h0000_0B00, 8'd3, 3'd0, `AXI_BURST_INCR, 4'd4, 32'h0);
       desc_put(5, 1'b1, 32'h1000_0B02, 8'd3, 3'd1, `AXI_BURST_INCR, 4'd5, 32'h0);
       desc_put(6, 1'b1, 32'h0000_0B20, 8'd1, 3'd0, `AXI_BURST_INCR, 4'd6, 32'h0);
@@ -679,19 +680,19 @@ module tb_axi_mix;
   endtask
 
   //==========================================================================
-  // M7：cfg 窄传输（显式 WSTRB 单拍部分写 + 读回）
+  // M7: cfg narrow transfer (explicit-WSTRB single-beat partial write + read back)
   //==========================================================================
   task automatic m7();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk, echk;
     begin
-      // 半字写：地址 0x1000_0B40 起 size=1 单拍，WSTRB=1100（高 2 字节）
+      // Halfword write: single size=1 beat at 0x1000_0B40, WSTRB=1100 (upper 2 bytes)
       cfg0_wstrb = 4'b1100;
       mst0_wr(32'h1000_0B40, 8'd0, 3'd1, `AXI_BURST_INCR, 4'd0, 32'h1A00_0000, st);
       chk(st == 0, "M7 wr status");
       ref_update(32'h1000_0B40, `AXI_BURST_INCR, 3'd1, 8'd0, 32'h1A00_0000, 1, 4'b1100);
       cfg0_wstrb = 4'b1111;
-      // 读回（读全字：高 2 字节 = 写的数据，低 2 字节 = 0）
+      // Read back (full word: upper 2 bytes = written data, lower 2 bytes = 0)
       mst0_rd(32'h1000_0B40, 8'd0, 3'd2, `AXI_BURST_INCR, 4'd0, st, chk);
       chk(st == 0, "M7 rd status");
       begin
@@ -705,8 +706,6 @@ module tb_axi_mix;
     end
   endtask
 
-  //--------------------------------------------------------------------------
-  // 主流程
   //--------------------------------------------------------------------------
   initial begin
     integer tseed;
@@ -742,7 +741,6 @@ module tb_axi_mix;
     $finish;
   end
 
-  // 全局超时看门狗
   initial begin
     repeat (2000000) @(posedge clk);
     $display("FAIL: global watchdog timeout");

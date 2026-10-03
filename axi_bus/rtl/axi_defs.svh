@@ -1,22 +1,27 @@
 //------------------------------------------------------------------------------
-// axi_defs.svh — AXI4 全交叉开关互联 全局定义
+// axi_defs.svh - global definitions for the AXI4 full-crossbar interconnect
 //
-// 宽度/规模通过 `ifndef 宏定义，编译时可用 -D 覆盖（如 -DAXI_N_MASTER=4）。
-// axi_interconnect 的模块参数默认值取自这些宏——改规模/宽度请走 -D，
-// 不要只改模块参数（axi_interconnect 里有 initial 检查兜底）。
+// Widths/scale are `ifndef-guarded macros, overridable at compile time via
+// -D (e.g. -DAXI_N_MASTER=4). axi_interconnect's module parameters default
+// from these macros - change scale/width via -D, not by overriding module
+// parameters alone (axi_interconnect has an initial-block check as a
+// safety net).
 //
-// 注意（工具约束）：本项目跑在 iverilog 12 上，其 SystemVerilog 支持有
-// 严重缺陷（struct 数组元素的成员访问会崩溃、struct 队列/关联数组不支持），
-// 因此 RTL 与 TB 全部采用扁平端口 + unpacked 数组（memory 风格）+
-// generate 展开的保守子集。不要在本项目引入 struct/queue/assoc array。
+// Tool constraints: this project runs on iverilog 12, whose SystemVerilog
+// support has serious defects (member access on struct array elements
+// crashes elaboration, struct queues / associative arrays are not
+// supported). RTL and TB therefore use a conservative subset: flat ports +
+// unpacked arrays (memory style) + generate unrolling. Do not introduce
+// structs / queues / associative arrays in this project.
 //
-// ID 方案：slave 侧 ID = {master tag(TAG_W), master id}，B/R 响应按 tag
-// 路由回 master 后再剥掉 tag，无需事务跟踪表。
+// ID scheme: slave-side ID = {master tag (TAG_W), master id}; B/R responses
+// are routed back to the master by the tag, which is then stripped - no
+// transaction tracking tables.
 //------------------------------------------------------------------------------
 `ifndef AXI_DEFS_SVH
 `define AXI_DEFS_SVH
 
-// ---- 宽度/规模宏（均可 -D 覆盖）----
+// ---- Width/scale macros (all -D overridable) ----
 `ifndef AXI_ADDR_W
 `define AXI_ADDR_W 32
 `endif
@@ -35,7 +40,7 @@
 `ifndef AXI_TAG_W
 `define AXI_TAG_W ($clog2(`AXI_N_MASTER))
 `endif
-// slave 侧 ID 宽度 = 主 ID + master tag
+// Slave-side ID width = master ID + master tag
 `ifndef AXI_SLV_ID_W
 `define AXI_SLV_ID_W (`AXI_ID_W + `AXI_TAG_W)
 `endif
@@ -45,21 +50,22 @@
 `ifndef AXI_DECERR_Q
 `define AXI_DECERR_Q 4
 `endif
-// 仲裁策略：0 = 固定优先级（编号小者优先），1 = Round-Robin
+// Arbitration policy: 0 = fixed priority (lowest index wins), 1 = round-robin
 `ifndef AXI_ARB_POLICY
 `define AXI_ARB_POLICY 1
 `endif
-// B/R 响应通道仲裁策略，同上
+// B/R response-channel arbitration policy, same encoding
 `ifndef AXI_RESP_POLICY
 `define AXI_RESP_POLICY 1
 `endif
-// slave 侧通道输出寄存器片（0 = 组合直连；1 = 5 通道全部打一拍，
-// 切断互联内部组合路径，每事务 +1 拍延迟）
+// Slave-side output register slices (0 = combinational; 1 = one register
+// stage on all 5 channels, breaking the interconnect's internal
+// combinational paths; +1 cycle of latency per transaction)
 `ifndef AXI_REG_SLICE
 `define AXI_REG_SLICE 0
 `endif
 
-// ---- 协议常量 ----
+// ---- Protocol constants ----
 `define AXI_RESP_OKAY   2'b00
 `define AXI_RESP_EXOKAY 2'b01
 `define AXI_RESP_SLVERR 2'b10
@@ -69,8 +75,9 @@
 `define AXI_BURST_WRAP  2'b10
 
 //------------------------------------------------------------------------------
-// AXI 突发拍地址计算（BFM / scoreboard / slave model 共享）
-// WRAP 边界按突发总大小 (len+1)*2**size 对齐，起点必须按 size 对齐
+// AXI burst beat-address computation (shared by BFM / scoreboard /
+// slave models). WRAP wraps at the boundary aligned to the total burst
+// size (len+1)*2**size; the start address must be size-aligned.
 //------------------------------------------------------------------------------
 function automatic [`AXI_ADDR_W-1:0] axi_beat_addr;
   input [`AXI_ADDR_W-1:0] start;
@@ -86,7 +93,7 @@ function automatic [`AXI_ADDR_W-1:0] axi_beat_addr;
     `AXI_BURST_INCR: addr = start + beat * num_bytes;
     `AXI_BURST_WRAP: begin
       reg [`AXI_ADDR_W-1:0] lower, upper;
-      lower = (start / total_bytes) * total_bytes;  // WRAP 总大小必为 2 的幂
+      lower = (start / total_bytes) * total_bytes;  // WRAP total size is a power of 2
       upper = lower + total_bytes;
       addr  = start + beat * num_bytes;
       if (addr >= upper) addr -= total_bytes;
@@ -98,10 +105,10 @@ function automatic [`AXI_ADDR_W-1:0] axi_beat_addr;
 endfunction
 
 //------------------------------------------------------------------------------
-// 地址/突发合法性检查（BFM 生成约束用）
-//   - 突发不跨 4KB 边界
-//   - INCR/WRAP 起点按 size 对齐
-//   - WRAP 时 len+1 ∈ {2,4,8,16}
+// Address/burst legality check (used as BFM generation constraints)
+//   - the burst must not cross a 4KB boundary
+//   - INCR/WRAP start address must be size-aligned
+//   - for WRAP, len+1 must be in {2,4,8,16}
 //------------------------------------------------------------------------------
 function automatic axi_addr_legal;
   input [`AXI_ADDR_W-1:0] addr;
@@ -123,30 +130,34 @@ function automatic axi_addr_legal;
 endfunction
 
 //------------------------------------------------------------------------------
-// 窄传输 WSTRB：AXI lane 映射规则——传输字节置于 addr % lanes 起的
-// 连续 2^size 个 lane（例如 32b 总线、地址 0x2 的 16b 传输 → 数据在
-// WDATA[31:16]，WSTRB=1100）。
-// 约束：单拍不跨总线字边界（addr%lanes + 2^size <= lanes）——
-// 跨字边界的非对齐窄传输超出本参考设计范围（AXI 允许但极少用）。
-// RTL 与 TB 参考模型共用，保证一致。
+// Narrow-transfer WSTRB: the AXI lane-mapping rule - transfer bytes are
+// placed on 2^size consecutive lanes starting at addr % lanes (e.g. on a
+// 32-bit bus, a 16-bit transfer at address 0x2 carries data on
+// WDATA[31:16], WSTRB=1100).
+// Constraint: a single beat must not cross the bus-word boundary
+// (addr%lanes + 2^size <= lanes) - unaligned narrow transfers crossing
+// the word boundary are out of scope for this reference design (allowed
+// by AXI but rarely used).
+// Shared by RTL and TB reference models to keep them consistent.
 //------------------------------------------------------------------------------
 function automatic [`AXI_DATA_W/8-1:0] axi_strb_for_size;
   input [2:0]             size;
   input [`AXI_ADDR_W-1:0] addr;
   integer bytes, shift;
   begin
-  bytes = 1 << size;   // size 合法值使 bytes <= lanes（size=2 即全字）
+  bytes = 1 << size;   // legal size values keep bytes <= lanes (size=2 is a full word)
   shift = addr % (`AXI_DATA_W/8);
-  // 复制计数必须为常量（iverilog），直接用宏
+  // Replication counts must be constant (iverilog); use the macro directly
   axi_strb_for_size =
     ({(`AXI_DATA_W/8){1'b1}} >> ((`AXI_DATA_W/8) - bytes)) << shift;
   end
 endfunction
 
 //------------------------------------------------------------------------------
-// 测试数据生成（BFM 与 scoreboard 共享，确定性，由 seed 唯一决定）：
-// 拍 b 的数据 = xorshift32 序列，保证同一 seed 在 BFM 与 scoreboard
-// 生成完全一致，避免在 TB 里传数组
+// Test data generation (shared by BFM and scoreboard; deterministic and
+// uniquely determined by the seed): beat b data = xorshift32 sequence.
+// The same seed generates identical data in the BFM and scoreboard,
+// avoiding passing arrays around in the TB.
 //------------------------------------------------------------------------------
 function automatic [`AXI_DATA_W-1:0] axi_test_data;
   input integer seed;
@@ -165,8 +176,9 @@ function automatic [`AXI_DATA_W-1:0] axi_test_data;
 endfunction
 
 //------------------------------------------------------------------------------
-// 测试 WSTRB 生成：确定性，可产生窄传输（含全 0 拍）。
-// mode 0 = 全 1；mode 1 = 随机窄；mode 2 = 全 0
+// Test WSTRB generation: deterministic; can produce narrow transfers
+// (including all-zero beats).
+// mode 0 = all ones; mode 1 = random narrow; mode 2 = all zeros
 //------------------------------------------------------------------------------
 function automatic [`AXI_DATA_W/8-1:0] axi_test_strb;
   input integer strb_seed;

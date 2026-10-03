@@ -1,22 +1,22 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_master_pipe — 可综合流水式多 outstanding AXI4 master（reference design）
+// axi_master_pipe - synthesizable pipelined multi-outstanding AXI4 master (reference design)
 //
-// 与 axi_master_cfg（单事务阻塞式）互补：
-//   - 描述符表（N_DESC 条，start 前由软件逐条写入）顺序执行
-//   - 读事务：AR 握手后立即发起下一条，不等待 R 响应（outstanding 流水）
-//   - 写事务：AW + W 内联完成（同一 master 的 W 流天然串行，满足互联
-//     "每 master 至多一条在途写流"规则），WLAST 后立即发起下一条
-//   - B/R 响应按 ID 在槽位表中跟踪（写响应等 B，读响应等 RLAST），
-//     全部完成才拉 done
+// Complements axi_master_cfg (single-transaction, blocking):
+//   - executes a descriptor table (N_DESC entries, written by software
+//     before start) sequentially
+//   - read transactions: the next one is issued right after the AR handshake
+//     without waiting for R (outstanding pipelining)
+//   - write transactions: AW + W complete inline (one master's W streams are
+//     naturally serialized, satisfying the interconnect's "one in-flight
 //
-// 数据生成（确定性，便于验证）：写第 b 拍 = desc_wdata0 + b，WSTRB 全 1；
-// 读校验和 = 所有读拍 rdata 的 XOR 累加。
+//     write stream per master" rule); the next one is issued right after WLAST
+//   - B/R responses are tracked by ID in a slot table (writes wait for B,
 //
-// 约束：同时 outstanding 的事务 ID 必须唯一（B/R 靠 ID 匹配槽位）；
-// 描述符表在 busy=0 时写入。
+//     reads wait for RLAST); done asserts only when all are complete
+// Deterministic data (easy to verify): write beat b = desc_wdata0 + b with
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// full WSTRB; read checksum = XOR accumulation of all read-beat rdata.
 //------------------------------------------------------------------------------
 module axi_master_pipe #(
   parameter int MST_ID     = 0,
@@ -28,27 +28,27 @@ module axi_master_pipe #(
 ) (
   input  wire clk,
   input  wire rstn,
-  // ---- 控制 / 描述符表写入（软件侧）----
-  input  wire start,           // 启动脉冲：顺序执行描述符 0..cfg_ndesc-1
-  input  wire [DW:0] cfg_ndesc,// 本批有效描述符数（1..N_DESC）
-  input  wire desc_wr,         // 描述符写使能（busy=0 时使用）
+  // ---- Control / descriptor-table write (software side) ----
+  input  wire start,           // start pulse: execute descriptors 0..cfg_ndesc-1 in order
+  input  wire [DW:0] cfg_ndesc,// number of valid descriptors in this batch (1..N_DESC)
+  input  wire desc_wr,         // descriptor write enable (use while busy=0)
   input  wire [$clog2(N_DESC)-1:0] desc_sel,
-  input  wire desc_dir,        // 0=写 1=读
+  input  wire desc_dir,        // 0=write 1=read
   input  wire [ADDR_WIDTH-1:0] desc_addr,
   input  wire [7:0]            desc_len,
   input  wire [2:0]            desc_size,
   input  wire [1:0]            desc_burst,
   input  wire [ID_WIDTH-1:0]   desc_id,
   input  wire [DATA_WIDTH-1:0] desc_wdata0,
-  // ---- 状态（软件侧）----
+  // ---- Status (software side) ----
   output wire busy,
-  output wire done,            // 全部事务完成（DONE 状态一拍，组合输出）
-  output wire resp_err,        // 有任一响应非 OKAY
+  output wire done,            // all transactions complete (one-cycle DONE-state output)
+  output wire resp_err,        // some response was not OKAY
   output wire [1:0]            last_err_resp,
-  output wire [N_SLOT-1:0]     slot_done,   // 槽位已完成（本批次）
-  output wire [N_SLOT*2-1:0]   slot_resp,   // 槽位响应码（[i*2 +: 2]）
-  output wire [DATA_WIDTH-1:0] rd_checksum, // 读数据 XOR 累加
-  // ---- AXI master 端口（AW）----
+  output wire [N_SLOT-1:0]     slot_done,   // slot completed (this batch)
+  output wire [N_SLOT*2-1:0]   slot_resp,   // slot response code ([i*2 +: 2])
+  output wire [DATA_WIDTH-1:0] rd_checksum, // read-data XOR accumulation
+  // ---- AXI master ports (AW) ----
   output reg awvalid,
   output reg [ID_WIDTH-1:0]   awid,
   output reg [ADDR_WIDTH-1:0] awaddr,
@@ -84,9 +84,8 @@ module axi_master_pipe #(
   output wire rready
 );
 
-  localparam DW = $clog2(N_DESC);   // 描述符编号宽度
+  localparam DW = $clog2(N_DESC);   // descriptor index width
 
-  // ---- 描述符表 ----
   reg              dt_dir    [0:N_DESC-1];
   reg [ADDR_WIDTH-1:0] dt_addr  [0:N_DESC-1];
   reg [7:0]        dt_len    [0:N_DESC-1];
@@ -95,24 +94,22 @@ module axi_master_pipe #(
   reg [ID_WIDTH-1:0] dt_id   [0:N_DESC-1];
   reg [DATA_WIDTH-1:0] dt_wdata0 [0:N_DESC-1];
 
-  // ---- 响应槽位表（单一 always_ff 驱动）----
   reg              sl_pend    [0:N_SLOT-1];
   reg              sl_is_wr   [0:N_SLOT-1];
   reg [ID_WIDTH-1:0] sl_id    [0:N_SLOT-1];
   reg [1:0]        sl_resp    [0:N_SLOT-1];
-  integer          sl_cnt;              // 待决槽数
+  integer          sl_cnt;              // pending slot count
   reg [N_SLOT-1:0] slot_done_q;
   reg [N_SLOT*2-1:0] slot_resp_q;
   reg              resp_err_q;
   reg [1:0]        last_err_resp_q;
   reg [DATA_WIDTH-1:0] chk_q;
 
-  // ---- 组合查找 ----
   integer slot_free, slot_b, slot_r;
   reg    slot_b_hit, slot_r_hit;
 
   always_comb begin
-    // 空槽
+    // Free slot
     slot_free = -1;
     begin
       integer fnd;
@@ -123,7 +120,7 @@ module axi_master_pipe #(
           fnd = 1;
         end
     end
-    // B 响应匹配槽
+    // B-response match slot
     slot_b = -1;
     begin
       integer fnd;
@@ -135,7 +132,7 @@ module axi_master_pipe #(
         end
     end
     slot_b_hit = (slot_b >= 0);
-    // R 响应匹配槽
+    // R-response match slot
     slot_r = -1;
     begin
       integer fnd;
@@ -150,12 +147,13 @@ module axi_master_pipe #(
   end
 
   //==========================================================================
-  // issue FSM：顺序走描述符（与响应处理共用同一 always_ff，避免多驱动）
+  // Issue FSM: walks the descriptors sequentially (shares the single
+  // always_ff with response handling to avoid multiple drivers)
   //==========================================================================
   localparam I_IDLE = 3'd0, I_NEXT = 3'd1, I_WAW = 3'd2,
              I_WDATA = 3'd3, I_RAR = 3'd4, I_WAIT = 3'd5, I_DONE = 3'd6;
   reg [2:0]      i_state;
-  // 宽度需能表示 N_DESC 本身（终值哨兵，比较 desc_idx == N_DESC）
+  // Width must represent N_DESC itself (sentinel value; compare desc_idx == N_DESC)
   reg [DW:0]     desc_idx;
   reg [7:0]      w_beat;
 
@@ -168,7 +166,7 @@ module axi_master_pipe #(
     awburst = dt_burst[desc_idx];
     wvalid  = (i_state == I_WDATA);
     wdata   = dt_wdata0[desc_idx] + w_beat;
-    // 窄传输：WSTRB 仅在 size 字节窗口内置位（按拍地址对齐）
+  // Issue FSM: walks the descriptors sequentially (shares the single
     wstrb   = axi_strb_for_size(dt_size[desc_idx],
                axi_beat_addr(dt_addr[desc_idx], dt_burst[desc_idx],
                              dt_size[desc_idx], dt_len[desc_idx], w_beat));
@@ -184,7 +182,7 @@ module axi_master_pipe #(
   assign bready = 1'b1;
   assign rready = 1'b1;
 
-  // 本拍是否新登记了一个槽（响应的 sl_cnt 更新需与它抵消）
+  // ---- Combinational lookup ----
   reg issue_hs;
   always_comb begin
     issue_hs = ((i_state == I_WAW) && awvalid && awready) ||
@@ -218,7 +216,7 @@ module axi_master_pipe #(
       last_err_resp_q <= 2'b00;
       chk_q          <= '0;
     end else begin
-      // ---- 描述符写入 ----
+  // Whether a slot was newly allocated this cycle (response sl_cnt updates
       if (desc_wr) begin
         dt_dir[desc_sel]    <= desc_dir;
         dt_addr[desc_sel]   <= desc_addr;
@@ -228,7 +226,7 @@ module axi_master_pipe #(
         dt_id[desc_sel]     <= desc_id;
         dt_wdata0[desc_sel] <= desc_wdata0;
       end
-      // ---- 批次启动复位 ----
+  // must cancel it out)
       if (start) begin
         resp_err_q      <= 1'b0;
         last_err_resp_q <= 2'b00;
@@ -236,7 +234,7 @@ module axi_master_pipe #(
         slot_resp_q     <= '0;
         chk_q           <= '0;
       end
-      // ---- issue FSM ----
+    // Narrow transfers: WSTRB is set only within the size-byte window
       case (i_state)
         I_IDLE: if (start) begin
                   desc_idx <= '0;
@@ -245,8 +243,8 @@ module axi_master_pipe #(
         I_NEXT: begin
           if (desc_idx == cfg_ndesc)
             i_state <= I_WAIT;
-          // 无空槽理论不可达（outstanding 数 <= N_DESC <= N_SLOT，
-          // 且写事务 W 内联完成后才发起下一笔），防御性停在原地
+            // Allocate a B-pending slot
+            // Allocate an R-pending slot
           else if (slot_free >= 0) begin
             if (dt_dir[desc_idx] == 1'b0)
               i_state <= I_WAW;
@@ -255,7 +253,7 @@ module axi_master_pipe #(
           end
         end
         I_WAW: if (awvalid && awready) begin
-                 // 登记 B 待决槽
+             // ---- Descriptor write ----
                  sl_pend[slot_free]  <= 1'b1;
                  sl_is_wr[slot_free] <= 1'b1;
                  sl_id[slot_free]    <= dt_id[desc_idx];
@@ -272,7 +270,7 @@ module axi_master_pipe #(
                    end
                  end
         I_RAR: if (arvalid && arready) begin
-                 // 登记 R 待决槽
+             // ---- Batch-start reset ----
                  sl_pend[slot_free]  <= 1'b1;
                  sl_is_wr[slot_free] <= 1'b0;
                  sl_id[slot_free]    <= dt_id[desc_idx];
@@ -281,13 +279,13 @@ module axi_master_pipe #(
                  i_state  <= I_NEXT;
                end
         I_WAIT: begin
-                  // 所有响应槽已清（进入此状态时 desc_idx == N_DESC）
+                  // DONE state lasts one cycle, then back to IDLE
                   if (sl_cnt == 0) i_state <= I_DONE;
                 end
         I_DONE: i_state <= I_IDLE;
         default: i_state <= I_IDLE;
       endcase
-      // ---- B 响应 ----
+  // (aligned to the beat address)
       if (bvalid && bready) begin
         if (!slot_b_hit) begin
           $error("axi_master_pipe: BID %0h no pending slot", bid);
@@ -302,7 +300,7 @@ module axi_master_pipe #(
           end
         end
       end
-      // ---- R 响应 ----
+  // Issue FSM: walks the descriptors sequentially
       if (rvalid && rready) begin
         if (!slot_r_hit) begin
           $error("axi_master_pipe: RID %0h no pending slot", rid);
@@ -320,7 +318,7 @@ module axi_master_pipe #(
           end
         end
       end
-      // ---- 槽位计数：净增量单次 NBA（避免同拍 issue/B/R 相互覆盖）----
+  // Response handling: B (single beat) and R (burst) in parallel
       begin
         integer d;
         d = 0;

@@ -1,13 +1,16 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_owner_fifo — W 通道归属 tag FIFO（移位寄存器式，head 组合输出）
+// axi_owner_fifo - W-channel ownership tag FIFO (shift-register style,
+// combinational head output)
 //
-// 互联里每 slave 一个实例：AW 握手时 push 被授权 master 的 tag，
-// WLAST 握手时 pop；W mux 由 head 驱动。push/pop 同拍合法。
+// One instance per slave inside the interconnect: push the granted master's
+// tag on the AW handshake, pop on the WLAST handshake; the W mux is driven
+// by head. Simultaneous push/pop is legal.
 //
-// full 在互联用法中不可达（每 master 至多一条在途写流，且 push 时该
-// master 的 w_pending=0，故占用者 ≤ N_MASTER-1，深度取 N_MASTER 即可），
-// 保留 full 输出仅用于断言/调试。
+// full is unreachable in interconnect usage (each master has at most one
+// write data stream in flight, and at push time that master's w_pending is
+// 0, so at most N_MASTER-1 entries are occupied - a depth of N_MASTER
+// suffices). The full output is kept for assertions/debug only.
 //------------------------------------------------------------------------------
 module axi_owner_fifo #(
   parameter int DEPTH = 2,

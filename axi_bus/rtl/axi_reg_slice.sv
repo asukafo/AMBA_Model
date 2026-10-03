@@ -1,20 +1,24 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_reg_slice — 前向寄存器片（skid buffer），AXI 任意单通道打拍
+// axi_reg_slice - forward register slice (skid buffer) for any single
+// AXI channel
 //
-// 行为：输出寄存一拍（切断前向组合路径），背压时用 skid 寄存器捕获
-// 一拍数据（不丢拍）：
-//   - 空：直通（dout = din，din_ready = dout_ready）
-//   - 有 skid 数据：dout = q，din_ready = 0（先排空）
-//   - 捕获：din_valid && !dout_ready 时存入 q
+// Behavior: the output is registered (breaking the forward combinational
+// path); under backpressure one beat is captured in the skid register
+// without loss:
+//   - empty: pass-through (dout = din, din_ready = dout_ready)
+//   - holding skid data: dout = q, din_ready = 0 (drain first)
+//   - capture: store din in q when din_valid && !dout_ready
 //
-// 协议透明：任意 valid/payload/ready 单通道均可插入（AXI 的 5 通道、
-// 任意握手序列语义不变，只增加一拍延迟）。
+// Protocol-transparent: can be inserted on any valid/payload/ready
+// channel (all 5 AXI channels, any handshake sequence); adds one cycle
+// of latency only.
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// Port style: flat packed vectors (iverilog-compatible subset), fully
+// synthesizable.
 //------------------------------------------------------------------------------
 module axi_reg_slice #(
-  parameter int W = 64    // payload 宽度
+  parameter int W = 64    // payload width
 ) (
   input  wire clk,
   input  wire rstn,
@@ -29,9 +33,13 @@ module axi_reg_slice #(
   reg         q_valid;
   reg  [W-1:0] q_data;
 
-  // 关键：din_ready 恒等于 dout_ready —— 排空拍与上游握手在同一沿完成，
-  // 上游"完成当前拍"与下游"消费该拍"严格同步，杜绝同一拍被直通重放
-  //（上游只在握手后前进到下一拍，排空时其当前拍与 q 中拍是同一拍）
+  // Key: din_ready must equal dout_ready - the drain beat and the upstream
+  // handshake complete on the same edge, so the upstream "completing the
+  // current beat" and the downstream "consuming that beat" stay strictly in
+  // sync. This prevents the same beat from being replayed through the
+  // pass-through path. (The upstream advances to the next beat only after
+  // its handshake, so while draining, its current beat is the same beat
+  // that sits in q.)
   always_comb begin
     if (q_valid) begin
       dout_valid = 1'b1;
@@ -49,10 +57,10 @@ module axi_reg_slice #(
       q_data  <= '0;
     end else begin
       if (q_valid) begin
-        // skid 数据排空
+        // Drain the skid data
         if (dout_ready) q_valid <= 1'b0;
       end else begin
-        // 直通被打断：捕获
+        // Pass-through stalled: capture
         if (din_valid && !dout_ready) begin
           q_valid <= 1'b1;
           q_data  <= din;

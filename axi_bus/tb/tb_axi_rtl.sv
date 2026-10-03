@@ -1,39 +1,39 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// tb_axi_rtl — RTL 级联调：可综合 master（axi_master_cfg）× 互联 ×
-// 可综合 RAM slave（axi_slave_ram）
+// tb_axi_rtl - RTL-level co-verification: synthesizable master (axi_master_cfg) x interconnect x
+// synthesizable RAM slave (axi_slave_ram)
 //
-// 与 tb_axi（BFM 级验证）互补：这里所有总线角色都是真实 RTL，
-// TB 只做配置寄存器驱动 + 结果检查，验证互联与真实时序模块的互操作。
+// Complements tb_axi (BFM-level verification): here every bus role is real RTL;
+// the TB only drives configuration registers and checks results, verifying
 //
-// 检查手段：
-//   1. master 状态机返回的状态码（OKAY/DECERR）
-//   2. master 的读校验和（读拍 XOR 累加）vs TB 参考模型复算
-//   3. RAM slave 调试读口逐字节比对参考内存
-//   4. 全局超时看门狗
+// interoperability between the interconnect and real timed modules.
+// Checks:
+//   1. status codes returned by the master FSMs (OKAY/DECERR)
+//   2. master read checksums (read-beat XOR accumulation) vs the TB reference model
+//   3. byte-by-byte comparison of the RAM slave debug read port against the reference memory
 //
-// 场景：
-//   R1 单主写读回（INCR 多拍，校验和比对）
-//   R2 双主并发写读不同 slave
-//   R3 双主抢同一 slave（仲裁压力 + 内存比对）
-//   R4 DECERR 读写（状态码检查）
-//   R5 WRAP 突发写读回
-//   R6 交叉流量：m0 写 slave0 同时 m1 读 slave1
+//   4. global timeout watchdog
+// Scenarios:
+//   R1 single master write/read-back (multi-beat INCR, checksum comparison)
+//   R2 two masters concurrently write/read different slaves
+//   R3 two masters hammer one slave (arbitration stress + memory comparison)
+//   R4 DECERR write/read (status-code checks)
+//   R5 WRAP burst write/read-back
 //------------------------------------------------------------------------------
 module tb_axi_rtl;
   timeunit 1ns / 1ps;
 
   localparam MAX_WAIT = 100000;
 
-  // ---- 时钟 / 复位 ----
+//   R6 cross traffic: m0 writes slave0 while m1 reads slave1
   reg clk;
   reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;   // 100MHz
 
-  // ---- 互联连线 + DUT（共用）----
+  // ---- Clock / reset ----
   `include "tb_axi_wires.svh"
-  // 直通属性默认 0（互斥/窄传输场景由专属 master 驱动对应位）
+  // ---- Interconnect wires + DUT (shared) ----
   assign s_awlock = '0;
   assign s_awcache = '0;
   assign s_awprot = '0;
@@ -46,7 +46,7 @@ module tb_axi_rtl;
   assign s_arregion = '0;
 
 
-  // ---- master 配置（每 master 一拍平段，[i*W +: W] 访问）----
+  // Pass-through attributes default to 0 (dedicated masters drive their bits in the exclusive/narrow scenarios)
   reg [2*`AXI_ADDR_W-1:0] cfg_addr;
   reg [2*8-1:0] cfg_len;
   reg [2*3-1:0] cfg_size;
@@ -57,10 +57,10 @@ module tb_axi_rtl;
   reg [2-1:0] cfg_wr_start;
   reg [2-1:0] cfg_rd_start;
 
-  // ---- RAM 调试读口 ----
+  // ---- Master config (one flat segment per master, accessed via [i*W +: W]) ----
   reg [2*`AXI_ADDR_W-1:0]      ram_dbg_addr;
 
-  // ---- RTL master 实例 ----
+  // ---- RAM debug read ports ----
   for (genvar i = 0; i < `AXI_N_MASTER; i++) begin : g_mst
     axi_master_cfg #(
       .MST_ID (i)
@@ -107,7 +107,7 @@ module tb_axi_rtl;
     );
   end
 
-  // ---- RTL RAM slave 实例 ----
+  // ---- RTL master instances ----
   for (genvar i = 0; i < `AXI_M_SLAVE; i++) begin : g_ram
     axi_slave_ram #(
       .SLV_ID (i)
@@ -149,11 +149,11 @@ module tb_axi_rtl;
     );
   end
 
-  // RAM 调试读口输出（组合）：TB 内部数组接收实例输出
+  // ---- RTL RAM slave instances ----
   wire [7:0] ram_dbg_byte_c [`AXI_M_SLAVE];
 
   //--------------------------------------------------------------------------
-  // 参考内存（与 axi_slave_ram 同步更新，用于逐字节比对）
+  // RAM debug read-port outputs (combinational): TB-internal arrays receive the instance outputs
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
   reg [7:0] ref_mem [0:SB_DEPTH-1];
@@ -168,7 +168,7 @@ module tb_axi_rtl;
     else slave_of = -1;
   endfunction
 
-  // 参考内存更新（master 写第 b 拍数据 = base + b，WSTRB 全 1）
+  // Reference memory (updated in lockstep with axi_slave_ram, used for byte-by-byte comparison)
   task automatic ref_update(
     input [`AXI_ADDR_W-1:0] addr,
     input [1:0] burst,
@@ -192,7 +192,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // 从 RAM 调试口读一个字（little-endian）
+  // Reference-memory update (master writes beat b data = base + b, WSTRB all ones)
   task automatic ram_word(input integer s, input [`AXI_ADDR_W-1:0] a,
                           output [`AXI_DATA_W-1:0] w);
     begin
@@ -226,7 +226,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // 参考内存 vs RAM 逐字节比对
+  // Read one word from the RAM debug port (little-endian)
   task automatic ram_compare();
     begin
       for (int s = 0; s < `AXI_M_SLAVE; s++) begin
@@ -261,7 +261,7 @@ module tb_axi_rtl;
   endtask
 
   //--------------------------------------------------------------------------
-  // 驱动任务：配置 master 并发起写/读事务，等待完成
+  // Byte-by-byte comparison of the reference memory against the RAM
   //--------------------------------------------------------------------------
   task automatic mst_wr(input integer m, input [`AXI_ADDR_W-1:0] addr,
                         input [7:0] len, input [2:0] size,
@@ -270,7 +270,7 @@ module tb_axi_rtl;
                         output [1:0] status);
     integer cnt;
     begin
-      // 配置写 TB 侧连线（实例输入端口不能层级驱动）
+  // Driver tasks: configure the master, launch a write/read transaction, wait for completion
       cfg_addr[m*`AXI_ADDR_W +: `AXI_ADDR_W] = addr;
       cfg_len[m*8 +: 8]     = len;
       cfg_size[m*3 +: 3]    = size;
@@ -338,7 +338,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // 期望校验和：按参考内存复算读突发的 XOR
+      // Config writes go to TB-side wires (instance input ports cannot be driven hierarchically)
   task automatic exp_checksum(
     input [`AXI_ADDR_W-1:0] addr,
     input [1:0] burst, input [2:0] size, input [7:0] len,
@@ -364,10 +364,10 @@ module tb_axi_rtl;
   endtask
 
   //--------------------------------------------------------------------------
-  // 场景
+  // Expected checksum: recompute the read burst's XOR from the reference memory
   //--------------------------------------------------------------------------
 
-  // R1：单主写读回（INCR 多拍）
+  // Scenarios
   task automatic r1();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk, echk;
@@ -391,7 +391,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // R2：双主并发写读不同 slave
+  // R1: single master write/read-back (multi-beat INCR)
   task automatic r2();
     reg [1:0] st0, st1;
     begin
@@ -412,7 +412,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // R3：双主抢同一 slave（仲裁压力）
+  // R2: two masters concurrently write/read different slaves
   task automatic r3();
     reg [1:0] st0, st1;
     begin
@@ -437,7 +437,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // R4：DECERR 读写
+  // R3: two masters hammer one slave (arbitration stress)
   task automatic r4();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk;
@@ -450,7 +450,7 @@ module tb_axi_rtl;
     end
   endtask
 
-  // R5：WRAP 突发写读回（起点 0x224，4 拍 × 4B，回卷边界 0x220）
+  // R4: DECERR write/read
   task automatic r5();
     reg [1:0] st;
     reg [`AXI_DATA_W-1:0] chk, echk;
@@ -467,12 +467,12 @@ module tb_axi_rtl;
     end
   endtask
 
-  // R6：交叉流量：m0 写 slave0 同时 m1 读 slave1
+  // R5: WRAP burst write/read-back (start 0x224, 4 beats x 4B, wrap boundary 0x220)
   task automatic r6();
     reg [1:0] st0, st1;
     reg [`AXI_DATA_W-1:0] chk1, echk1;
     begin
-      // 先给 slave1 放数据（R1 已写过 0x1000_0200，直接读回）
+  // R6: cross traffic: m0 writes slave0 while m1 reads slave1
       fork
         begin
           mst_wr(0, 32'h0000_0A00, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd0, 32'h9000_0000, st0);
@@ -492,7 +492,7 @@ module tb_axi_rtl;
   endtask
 
   //--------------------------------------------------------------------------
-  // 主流程
+      // Seed slave1's data first (R1 already wrote 0x1000_0200; read it back)
   //--------------------------------------------------------------------------
   initial begin
     $display("=== AXI4 Interconnect RTL-level TB ===");
@@ -519,7 +519,7 @@ module tb_axi_rtl;
     $finish;
   end
 
-  // 全局超时看门狗
+  // Main flow
   initial begin
     repeat (2000000) @(posedge clk);
     $display("FAIL: global watchdog timeout");

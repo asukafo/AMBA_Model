@@ -1,22 +1,27 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_master_lfsr — 可综合 LFSR 随机流量生成 master（soak 测试源）
+// axi_master_lfsr - synthesizable LFSR random-traffic generator master (soak-test source)
 //
-// 与 cfg/pipe 的差异：事务参数由内部 xorshift32 LFSR 自动生成，无需
-// 软件逐笔配置——enable 后持续发出随机方向/地址/长度/宽度的背靠背
-// 事务，直到完成 cfg_tx_max 笔。
+// Unlike cfg/pipe: transaction parameters are generated automatically by an
+// internal xorshift32 LFSR; no per-transaction software configuration -
+// after enable, back-to-back transactions with random direction/address/length
 //
-// 事务参数生成（确定性，TB 可复算）：
+// are issued until cfg_tx_max transactions have completed.
 //   dir = lfsr[0]；addr = cfg_base | (lfsr & cfg_mask)；
 //   len = lfsr[7:5]；size = 2（32b）；burst = INCR；
-//   id = 已发笔数 % 8（单 outstanding，无碰撞）；wdata0 = lfsr
-// 每笔生成时 tx_vld 脉冲一拍，tx_* 输出本笔参数（TB 监听更新参考模型）。
-// 写 WSTRB 全 1；读校验和 = 所有读拍 XOR 累加。
+// Transaction parameter generation (deterministic; TB can recompute):
+//   id = issued count % 8 (single outstanding, no collision); wdata0 = lfsr
+// tx_vld pulses for one cycle per generated transaction; tx_* outputs its
 //
-// 单 outstanding 设计（写完成才发下一笔，读完成才发下一笔）——
-// outstanding 流水由 axi_master_pipe 覆盖，本模块专注随机性 soak。
+// parameters (the TB monitors them to update the reference model).
+// Write WSTRB all ones; read checksum = XOR accumulation of all read beats.
 //
-// 端口风格：拍平 packed 向量（iverilog 兼容子集），全部可综合。
+// Single-outstanding design (the next transaction is issued only after the
+// previous write or read completes) - outstanding pipelining is covered by
+// axi_master_pipe; this module focuses on random soak traffic.
+//
+// Port style: flat packed vectors (iverilog-compatible subset), fully
+// synthesizable.
 //------------------------------------------------------------------------------
 module axi_master_lfsr #(
   parameter int MST_ID     = 0,
@@ -26,21 +31,19 @@ module axi_master_lfsr #(
 ) (
   input  wire clk,
   input  wire rstn,
-  // ---- 控制（软件侧）----
-  input  wire enable,            // 高电平运行，完成 cfg_tx_max 笔后 done
   input  wire [15:0] cfg_tx_max,
   input  wire [ADDR_WIDTH-1:0] cfg_base,
-  input  wire [ADDR_WIDTH-1:0] cfg_mask,   // 地址扰动窗口
-  input  wire [31:0] cfg_seed,             // LFSR 初值
-  // ---- 状态（软件侧）----
+  // ---- Control (software side) ----
+  input  wire enable,            // run while high; done after cfg_tx_max transactions
   output wire busy,
-  output wire done,              // 完成脉冲（DONE 状态一拍）
-  output reg [15:0] tx_cnt,     // 已完成事务数
+  input  wire [ADDR_WIDTH-1:0] cfg_mask,   // address scramble window
+  input  wire [31:0] cfg_seed,             // LFSR seed
   output wire resp_err,
   output wire [1:0] last_err_resp,
-  output wire [15:0] gen_cnt,     // G_GEN 进入次数（调试/统计）
+  output wire [15:0] gen_cnt,     // G_GEN entry count (debug/statistics)
+  // ---- Status (software side) ----
   output wire [DATA_WIDTH-1:0] rd_checksum,
-  // ---- 事务日志（本笔参数，tx_vld 拍有效）----
+  output wire done,              // completion pulse (one-cycle DONE-state output)
   output wire tx_vld,
   output wire tx_dir,
   output wire [ADDR_WIDTH-1:0] tx_addr,
@@ -49,7 +52,7 @@ module axi_master_lfsr #(
   output wire [1:0]            tx_burst,
   output wire [ID_WIDTH-1:0]   tx_id,
   output wire [DATA_WIDTH-1:0] tx_wdata0,
-  // ---- AXI master 端口（AW）----
+  output reg [15:0] tx_cnt,     // completed transaction count
   output reg awvalid,
   output reg [ID_WIDTH-1:0]   awid,
   output reg [ADDR_WIDTH-1:0] awaddr,
@@ -94,10 +97,9 @@ module axi_master_lfsr #(
   reg [DATA_WIDTH-1:0] chk_q;
   reg resp_err_q;
   reg [1:0] last_err_resp_q;
-  reg run_done_q;   // 本批完成锁存（撤 enable 解锁，防自动重跑）
   reg [15:0] gen_cnt_q;
 
-  // 本笔事务参数（GEN 拍捕获，执行期间保持）
+  // ---- Transaction log (current transaction parameters; valid on the tx_vld cycle) ----
   reg tx_dir_q;
   reg [ADDR_WIDTH-1:0] tx_addr_q;
   reg [7:0]            tx_len_q;
@@ -125,8 +127,8 @@ module axi_master_lfsr #(
     rready  = (g_state == G_RD);
   end
 
-  // 事务日志输出 = 当前参数（tx_vld 为 GEN 拍的寄存一拍脉冲，
-  // 与捕获后的 tx_* 寄存器对齐——捕获值与 GEN 拍取同一 lfsr 值）
+  // Current transaction parameters (captured on the GEN cycle, held during execution)
+  reg run_done_q;   // batch-complete latch (unlatched by deasserting enable, prevents auto-rerun)
   reg tx_vld_q;
   assign tx_vld    = tx_vld_q;
   assign tx_dir    = tx_dir_q;
@@ -151,9 +153,9 @@ module axi_master_lfsr #(
       gen_cnt_q <= 16'd0;
     end else begin
       tx_vld_q <= (g_state == G_GEN);
-      // 撤 enable 解锁本批完成锁存
+      // Deasserting enable unlatches the batch-complete latch
       if (!enable) run_done_q <= 1'b0;
-      // LFSR 每拍推进
+      // Advance the LFSR every cycle
       begin
         reg [31:0] x;
         x = lfsr;
@@ -173,7 +175,7 @@ module axi_master_lfsr #(
                   g_state  <= G_GEN;
                 end
         G_GEN: begin
-                 // 从当前 LFSR 捕获本笔参数
+  // pulse of the GEN cycle, aligned with the captured tx_* registers - the captured
                  gen_cnt_q <= gen_cnt_q + 16'd1;
                  tx_dir_q     <= lfsr[0];
                  tx_addr_q    <= cfg_base | (lfsr & cfg_mask);
@@ -209,7 +211,7 @@ module axi_master_lfsr #(
         G_DONE: begin
                   tx_cnt_q <= tx_cnt_q + 16'd1;
                   if (tx_cnt_q + 16'd1 >= cfg_tx_max) begin
-                    run_done_q <= 1'b1;   // 本批完成，锁存
+                    run_done_q <= 1'b1;   // batch complete, latch it
                     g_state <= G_IDLE;
                   end else begin
                     g_state <= G_GEN;
@@ -220,7 +222,6 @@ module axi_master_lfsr #(
     end
   end
 
-  // 全部事务完成回到 IDLE（TB 在 done 后撤 enable）
   assign done        = (g_state == G_IDLE) && (tx_cnt_q >= cfg_tx_max);
   assign busy        = (g_state != G_IDLE);
   assign tx_cnt      = tx_cnt_q;

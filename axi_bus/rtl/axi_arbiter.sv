@@ -1,15 +1,19 @@
 `include "axi_defs.svh"
 //------------------------------------------------------------------------------
-// axi_arbiter — 通用仲裁器：req[N] -> onehot grant
-//   POLICY = 0: 固定优先级（编号小者优先）
-//   POLICY = 1: Round-Robin（rr_ptr 从上次授权者的下一位起循环扫描）
+// axi_arbiter - generic arbiter: req[N] -> onehot grant
+//   POLICY = 0: fixed priority (lowest index wins)
+//   POLICY = 1: round-robin (rr_ptr scans cyclically starting after the
+//               last granted requester)
 //
-// 时序约定：
-//   - grant 寄存输出，授权后锁存直到 ack（被授权拍的握手）完成
-//   - RR 指针仅在握手（ack）时旋转
-//   - 相邻两次授权之间有一个空拍（释放 grant 的下一拍才选新请求）
-//   - 授权锁存期间 req 变化被忽略；请求方必须保持 req 直到握手
-//     （AXI 下即 VALID 必须保持到 READY，由互联与 BFM 共同保证）
+// Timing:
+//   - grant is a registered output; once issued it is locked until ack
+//     (the handshake of the granted beat)
+//   - the RR pointer rotates only on handshake (ack)
+//   - there is one bubble cycle between consecutive grants (the next
+//     request is picked one cycle after grant release)
+//   - req changes are ignored while a grant is locked; a requester must
+//     hold req until the handshake (under AXI this means VALID must be
+//     held until READY, guaranteed jointly by the interconnect and BFM)
 //------------------------------------------------------------------------------
 module axi_arbiter #(
   parameter int N      = 2,
@@ -37,13 +41,13 @@ module axi_arbiter #(
     end
   endfunction
 
-  // 组合挑选（仅在无授权时被采样）
+  // Combinational pick (sampled only when no grant is held)
   reg found;
   always_comb begin
     pick  = '0;
     found = 1'b0;
     if (POLICY == 0) begin
-      // 固定优先级：最低编号有效位
+      // Fixed priority: lowest set bit
       for (int i = 0; i < N; i++) begin
         if (req[i] && !found) begin
           pick[i] = 1'b1;
@@ -51,7 +55,7 @@ module axi_arbiter #(
         end
       end
     end else begin
-      // RR：从 rr_ptr 起循环扫描
+      // RR: scan cyclically starting from rr_ptr
       for (int k = 0; k < N; k++) begin
         int unsigned i;
         i = rr_ptr + k;
