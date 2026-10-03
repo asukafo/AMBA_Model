@@ -16,72 +16,72 @@ module axi_slave_reg #(
   parameter int SLV_ID = 0,
   parameter int N_REG  = 64     // 32b 寄存器数，2 的幂
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- AW ----
-  input  logic awvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] awid,
-  input  logic [`AXI_ADDR_W-1:0]   awaddr,
-  input  logic [7:0]               awlen,
-  input  logic [2:0]               awsize,
-  input  logic [1:0]               awburst,
-  output logic awready,
+  input  wire awvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] awid,
+  input  wire [`AXI_ADDR_W-1:0]   awaddr,
+  input  wire [7:0]               awlen,
+  input  wire [2:0]               awsize,
+  input  wire [1:0]               awburst,
+  output wire awready,
   // ---- W ----
-  input  logic wvalid,
-  input  logic [`AXI_DATA_W-1:0]   wdata,
-  input  logic [`AXI_DATA_W/8-1:0] wstrb,
-  input  logic wlast,
-  output logic wready,
+  input  wire wvalid,
+  input  wire [`AXI_DATA_W-1:0]   wdata,
+  input  wire [`AXI_DATA_W/8-1:0] wstrb,
+  input  wire wlast,
+  output wire wready,
   // ---- B ----
-  output logic bvalid,
-  output logic [`AXI_SLV_ID_W-1:0] bid,
-  output logic [1:0] bresp,
-  input  logic bready,
+  output wire bvalid,
+  output wire [`AXI_SLV_ID_W-1:0] bid,
+  output wire [1:0] bresp,
+  input  wire bready,
   // ---- AR ----
-  input  logic arvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] arid,
-  input  logic [`AXI_ADDR_W-1:0]   araddr,
-  input  logic [7:0]               arlen,
-  input  logic [2:0]               arsize,
-  input  logic [1:0]               arburst,
-  output logic arready,
+  input  wire arvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] arid,
+  input  wire [`AXI_ADDR_W-1:0]   araddr,
+  input  wire [7:0]               arlen,
+  input  wire [2:0]               arsize,
+  input  wire [1:0]               arburst,
+  output wire arready,
   // ---- R ----
-  output logic rvalid,
-  output logic [`AXI_SLV_ID_W-1:0] rid,
-  output logic [`AXI_DATA_W-1:0]   rdata,
-  output logic [1:0]               rresp,
-  output logic rlast,
-  input  logic rready,
+  output wire rvalid,
+  output wire [`AXI_SLV_ID_W-1:0] rid,
+  output reg [`AXI_DATA_W-1:0]   rdata,
+  output wire [1:0]               rresp,
+  output wire rlast,
+  input  wire rready,
   // ---- 调试读口（TB 校验寄存器）----
-  input  logic [$clog2(N_REG)-1:0] dbg_sel,
-  output logic [`AXI_DATA_W-1:0]   dbg_val
+  input  wire [$clog2(N_REG)-1:0] dbg_sel,
+  output wire [`AXI_DATA_W-1:0]   dbg_val
 );
 
   localparam IDX_W = $clog2(N_REG) + 2;   // 字节地址窗口宽度
 
-  logic [`AXI_DATA_W-1:0] regs [0:N_REG-1];
+  reg [`AXI_DATA_W-1:0] regs [0:N_REG-1];
 
   // ---- 事务寄存器 ----
-  logic [`AXI_SLV_ID_W-1:0] aw_id_q;
-  logic [`AXI_ADDR_W-1:0]   aw_addr_q;
-  logic [7:0]               aw_len_q;
-  logic [2:0]               aw_size_q;
-  logic [1:0]               aw_burst_q;
-  logic [7:0]               w_beat_q;
-  logic [`AXI_SLV_ID_W-1:0] ar_id_q;
-  logic [`AXI_ADDR_W-1:0]   ar_addr_q;
-  logic [7:0]               ar_len_q;
-  logic [2:0]               ar_size_q;
-  logic [1:0]               ar_burst_q;
-  logic [7:0]               r_beat_q;
+  reg [`AXI_SLV_ID_W-1:0] aw_id_q;
+  reg [`AXI_ADDR_W-1:0]   aw_addr_q;
+  reg [7:0]               aw_len_q;
+  reg [2:0]               aw_size_q;
+  reg [1:0]               aw_burst_q;
+  reg [7:0]               w_beat_q;
+  reg [`AXI_SLV_ID_W-1:0] ar_id_q;
+  reg [`AXI_ADDR_W-1:0]   ar_addr_q;
+  reg [7:0]               ar_len_q;
+  reg [2:0]               ar_size_q;
+  reg [1:0]               ar_burst_q;
+  reg [7:0]               r_beat_q;
 
-  logic [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
-  logic [`AXI_DATA_W-1:0]   w_merged;
+  reg [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
+  reg [`AXI_DATA_W-1:0]   w_merged;
 
   // ---- FSM ----
   localparam W_IDLE = 2'd0, W_AW = 2'd1, W_DATA = 2'd2, W_B = 2'd3;
   localparam R_IDLE = 2'd0, R_AR = 2'd1, R_DATA = 2'd2;
-  logic [1:0] w_state, r_state;
+  reg [1:0] w_state, r_state;
 
   // 读写共用 busy：AW 与 AR 同拍竞争时 AW 优先
   assign awready = (w_state == W_IDLE) && (r_state == R_IDLE);

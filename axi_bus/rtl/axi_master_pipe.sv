@@ -26,90 +26,90 @@ module axi_master_pipe #(
   parameter int DATA_WIDTH = `AXI_DATA_W,
   parameter int ID_WIDTH   = `AXI_ID_W
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 控制 / 描述符表写入（软件侧）----
-  input  logic start,           // 启动脉冲：顺序执行描述符 0..cfg_ndesc-1
-  input  logic [DW:0] cfg_ndesc,// 本批有效描述符数（1..N_DESC）
-  input  logic desc_wr,         // 描述符写使能（busy=0 时使用）
-  input  logic [$clog2(N_DESC)-1:0] desc_sel,
-  input  logic desc_dir,        // 0=写 1=读
-  input  logic [ADDR_WIDTH-1:0] desc_addr,
-  input  logic [7:0]            desc_len,
-  input  logic [2:0]            desc_size,
-  input  logic [1:0]            desc_burst,
-  input  logic [ID_WIDTH-1:0]   desc_id,
-  input  logic [DATA_WIDTH-1:0] desc_wdata0,
+  input  wire start,           // 启动脉冲：顺序执行描述符 0..cfg_ndesc-1
+  input  wire [DW:0] cfg_ndesc,// 本批有效描述符数（1..N_DESC）
+  input  wire desc_wr,         // 描述符写使能（busy=0 时使用）
+  input  wire [$clog2(N_DESC)-1:0] desc_sel,
+  input  wire desc_dir,        // 0=写 1=读
+  input  wire [ADDR_WIDTH-1:0] desc_addr,
+  input  wire [7:0]            desc_len,
+  input  wire [2:0]            desc_size,
+  input  wire [1:0]            desc_burst,
+  input  wire [ID_WIDTH-1:0]   desc_id,
+  input  wire [DATA_WIDTH-1:0] desc_wdata0,
   // ---- 状态（软件侧）----
-  output logic busy,
-  output logic done,            // 全部事务完成（DONE 状态一拍，组合输出）
-  output logic resp_err,        // 有任一响应非 OKAY
-  output logic [1:0]            last_err_resp,
-  output logic [N_SLOT-1:0]     slot_done,   // 槽位已完成（本批次）
-  output logic [N_SLOT*2-1:0]   slot_resp,   // 槽位响应码（[i*2 +: 2]）
-  output logic [DATA_WIDTH-1:0] rd_checksum, // 读数据 XOR 累加
+  output wire busy,
+  output wire done,            // 全部事务完成（DONE 状态一拍，组合输出）
+  output wire resp_err,        // 有任一响应非 OKAY
+  output wire [1:0]            last_err_resp,
+  output wire [N_SLOT-1:0]     slot_done,   // 槽位已完成（本批次）
+  output wire [N_SLOT*2-1:0]   slot_resp,   // 槽位响应码（[i*2 +: 2]）
+  output wire [DATA_WIDTH-1:0] rd_checksum, // 读数据 XOR 累加
   // ---- AXI master 端口（AW）----
-  output logic awvalid,
-  output logic [ID_WIDTH-1:0]   awid,
-  output logic [ADDR_WIDTH-1:0] awaddr,
-  output logic [7:0]            awlen,
-  output logic [2:0]            awsize,
-  output logic [1:0]            awburst,
-  input  logic awready,
+  output reg awvalid,
+  output reg [ID_WIDTH-1:0]   awid,
+  output reg [ADDR_WIDTH-1:0] awaddr,
+  output reg [7:0]            awlen,
+  output reg [2:0]            awsize,
+  output reg [1:0]            awburst,
+  input  wire awready,
   // ---- W ----
-  output logic wvalid,
-  output logic [DATA_WIDTH-1:0]   wdata,
-  output logic [DATA_WIDTH/8-1:0] wstrb,
-  output logic wlast,
-  input  logic wready,
+  output reg wvalid,
+  output reg [DATA_WIDTH-1:0]   wdata,
+  output reg [DATA_WIDTH/8-1:0] wstrb,
+  output reg wlast,
+  input  wire wready,
   // ---- B ----
-  input  logic bvalid,
-  input  logic [ID_WIDTH-1:0] bid,
-  input  logic [1:0] bresp,
-  output logic bready,
+  input  wire bvalid,
+  input  wire [ID_WIDTH-1:0] bid,
+  input  wire [1:0] bresp,
+  output wire bready,
   // ---- AR ----
-  output logic arvalid,
-  output logic [ID_WIDTH-1:0]   arid,
-  output logic [ADDR_WIDTH-1:0] araddr,
-  output logic [7:0]            arlen,
-  output logic [2:0]            arsize,
-  output logic [1:0]            arburst,
-  input  logic arready,
+  output reg arvalid,
+  output reg [ID_WIDTH-1:0]   arid,
+  output reg [ADDR_WIDTH-1:0] araddr,
+  output reg [7:0]            arlen,
+  output reg [2:0]            arsize,
+  output reg [1:0]            arburst,
+  input  wire arready,
   // ---- R ----
-  input  logic rvalid,
-  input  logic [ID_WIDTH-1:0] rid,
-  input  logic [DATA_WIDTH-1:0] rdata,
-  input  logic [1:0] rresp,
-  input  logic rlast,
-  output logic rready
+  input  wire rvalid,
+  input  wire [ID_WIDTH-1:0] rid,
+  input  wire [DATA_WIDTH-1:0] rdata,
+  input  wire [1:0] rresp,
+  input  wire rlast,
+  output wire rready
 );
 
   localparam DW = $clog2(N_DESC);   // 描述符编号宽度
 
   // ---- 描述符表 ----
-  logic             dt_dir    [0:N_DESC-1];
-  logic [ADDR_WIDTH-1:0] dt_addr  [0:N_DESC-1];
-  logic [7:0]       dt_len    [0:N_DESC-1];
-  logic [2:0]       dt_size   [0:N_DESC-1];
-  logic [1:0]       dt_burst  [0:N_DESC-1];
-  logic [ID_WIDTH-1:0] dt_id  [0:N_DESC-1];
-  logic [DATA_WIDTH-1:0] dt_wdata0 [0:N_DESC-1];
+  reg              dt_dir    [0:N_DESC-1];
+  reg [ADDR_WIDTH-1:0] dt_addr  [0:N_DESC-1];
+  reg [7:0]        dt_len    [0:N_DESC-1];
+  reg [2:0]        dt_size   [0:N_DESC-1];
+  reg [1:0]        dt_burst  [0:N_DESC-1];
+  reg [ID_WIDTH-1:0] dt_id   [0:N_DESC-1];
+  reg [DATA_WIDTH-1:0] dt_wdata0 [0:N_DESC-1];
 
   // ---- 响应槽位表（单一 always_ff 驱动）----
-  logic             sl_pend    [0:N_SLOT-1];
-  logic             sl_is_wr   [0:N_SLOT-1];
-  logic [ID_WIDTH-1:0] sl_id   [0:N_SLOT-1];
-  logic [1:0]       sl_resp    [0:N_SLOT-1];
-  integer           sl_cnt;              // 待决槽数
-  logic [N_SLOT-1:0] slot_done_q;
-  logic [N_SLOT*2-1:0] slot_resp_q;
-  logic             resp_err_q;
-  logic [1:0]       last_err_resp_q;
-  logic [DATA_WIDTH-1:0] chk_q;
+  reg              sl_pend    [0:N_SLOT-1];
+  reg              sl_is_wr   [0:N_SLOT-1];
+  reg [ID_WIDTH-1:0] sl_id    [0:N_SLOT-1];
+  reg [1:0]        sl_resp    [0:N_SLOT-1];
+  integer          sl_cnt;              // 待决槽数
+  reg [N_SLOT-1:0] slot_done_q;
+  reg [N_SLOT*2-1:0] slot_resp_q;
+  reg              resp_err_q;
+  reg [1:0]        last_err_resp_q;
+  reg [DATA_WIDTH-1:0] chk_q;
 
   // ---- 组合查找 ----
   integer slot_free, slot_b, slot_r;
-  logic   slot_b_hit, slot_r_hit;
+  reg    slot_b_hit, slot_r_hit;
 
   always_comb begin
     // 空槽
@@ -154,10 +154,10 @@ module axi_master_pipe #(
   //==========================================================================
   localparam I_IDLE = 3'd0, I_NEXT = 3'd1, I_WAW = 3'd2,
              I_WDATA = 3'd3, I_RAR = 3'd4, I_WAIT = 3'd5, I_DONE = 3'd6;
-  logic [2:0]      i_state;
+  reg [2:0]      i_state;
   // 宽度需能表示 N_DESC 本身（终值哨兵，比较 desc_idx == N_DESC）
-  logic [DW:0]     desc_idx;
-  logic [7:0]      w_beat;
+  reg [DW:0]     desc_idx;
+  reg [7:0]      w_beat;
 
   always_comb begin
     awvalid = (i_state == I_WAW);
@@ -185,7 +185,7 @@ module axi_master_pipe #(
   assign rready = 1'b1;
 
   // 本拍是否新登记了一个槽（响应的 sl_cnt 更新需与它抵消）
-  logic issue_hs;
+  reg issue_hs;
   always_comb begin
     issue_hs = ((i_state == I_WAW) && awvalid && awready) ||
                ((i_state == I_RAR) && arvalid && arready);

@@ -53,6 +53,11 @@
 `ifndef AXI_RESP_POLICY
 `define AXI_RESP_POLICY 1
 `endif
+// slave 侧通道输出寄存器片（0 = 组合直连；1 = 5 通道全部打一拍，
+// 切断互联内部组合路径，每事务 +1 拍延迟）
+`ifndef AXI_REG_SLICE
+`define AXI_REG_SLICE 0
+`endif
 
 // ---- 协议常量 ----
 `define AXI_RESP_OKAY   2'b00
@@ -67,20 +72,20 @@
 // AXI 突发拍地址计算（BFM / scoreboard / slave model 共享）
 // WRAP 边界按突发总大小 (len+1)*2**size 对齐，起点必须按 size 对齐
 //------------------------------------------------------------------------------
-function automatic logic [`AXI_ADDR_W-1:0] axi_beat_addr(
-  input logic [`AXI_ADDR_W-1:0] start,
-  input logic [1:0]             burst,
-  input logic [2:0]             size,
-  input logic [7:0]             len,
-  input int unsigned            beat
-);
-  logic [`AXI_ADDR_W-1:0] num_bytes, total_bytes, addr;
+function automatic [`AXI_ADDR_W-1:0] axi_beat_addr;
+  input [`AXI_ADDR_W-1:0] start;
+  input [1:0]             burst;
+  input [2:0]             size;
+  input [7:0]             len;
+  input integer           beat;
+  reg [`AXI_ADDR_W-1:0] num_bytes, total_bytes, addr;
   num_bytes   = (1 << size);
   total_bytes = (len + 1) * num_bytes;
+  begin
   case (burst)
     `AXI_BURST_INCR: addr = start + beat * num_bytes;
     `AXI_BURST_WRAP: begin
-      logic [`AXI_ADDR_W-1:0] lower, upper;
+      reg [`AXI_ADDR_W-1:0] lower, upper;
       lower = (start / total_bytes) * total_bytes;  // WRAP 总大小必为 2 的幂
       upper = lower + total_bytes;
       addr  = start + beat * num_bytes;
@@ -88,7 +93,8 @@ function automatic logic [`AXI_ADDR_W-1:0] axi_beat_addr(
     end
     default: addr = start;  // FIXED
   endcase
-  return addr;
+  axi_beat_addr = addr;
+  end
 endfunction
 
 //------------------------------------------------------------------------------
@@ -97,13 +103,13 @@ endfunction
 //   - INCR/WRAP 起点按 size 对齐
 //   - WRAP 时 len+1 ∈ {2,4,8,16}
 //------------------------------------------------------------------------------
-function automatic bit axi_addr_legal(
-  input logic [`AXI_ADDR_W-1:0] addr,
-  input logic [1:0]             burst,
-  input logic [2:0]             size,
-  input logic [7:0]             len
-);
-  logic [`AXI_ADDR_W-1:0] num_bytes, total_bytes;
+function automatic axi_addr_legal;
+  input [`AXI_ADDR_W-1:0] addr;
+  input [1:0]             burst;
+  input [2:0]             size;
+  input [7:0]             len;
+  reg [`AXI_ADDR_W-1:0] num_bytes, total_bytes;
+  begin
   num_bytes   = (1 << size);
   total_bytes = (len + 1) * num_bytes;
   axi_addr_legal = 1'b1;
@@ -113,6 +119,7 @@ function automatic bit axi_addr_legal(
   if (burst == `AXI_BURST_WRAP &&
       (len + 1) != 2 && (len + 1) != 4 && (len + 1) != 8 && (len + 1) != 16)
     axi_addr_legal = 1'b0;
+  end
 endfunction
 
 //------------------------------------------------------------------------------
@@ -123,16 +130,17 @@ endfunction
 // 跨字边界的非对齐窄传输超出本参考设计范围（AXI 允许但极少用）。
 // RTL 与 TB 参考模型共用，保证一致。
 //------------------------------------------------------------------------------
-function automatic logic [`AXI_DATA_W/8-1:0] axi_strb_for_size(
-  input logic [2:0]             size,
-  input logic [`AXI_ADDR_W-1:0] addr
-);
+function automatic [`AXI_DATA_W/8-1:0] axi_strb_for_size;
+  input [2:0]             size;
+  input [`AXI_ADDR_W-1:0] addr;
   integer bytes, shift;
+  begin
   bytes = 1 << size;   // size 合法值使 bytes <= lanes（size=2 即全字）
   shift = addr % (`AXI_DATA_W/8);
   // 复制计数必须为常量（iverilog），直接用宏
   axi_strb_for_size =
     ({(`AXI_DATA_W/8){1'b1}} >> ((`AXI_DATA_W/8) - bytes)) << shift;
+  end
 endfunction
 
 //------------------------------------------------------------------------------
@@ -140,11 +148,11 @@ endfunction
 // 拍 b 的数据 = xorshift32 序列，保证同一 seed 在 BFM 与 scoreboard
 // 生成完全一致，避免在 TB 里传数组
 //------------------------------------------------------------------------------
-function automatic logic [`AXI_DATA_W-1:0] axi_test_data(
-  input int unsigned seed,
-  input int unsigned beat
-);
-  logic [31:0] x;
+function automatic [`AXI_DATA_W-1:0] axi_test_data;
+  input integer seed;
+  input integer beat;
+  reg [31:0] x;
+  begin
   x = seed ^ (beat * 32'h9E3779B9) ^ 32'hA5A5A5A5;
   x ^= x << 13;
   x ^= x >> 17;
@@ -153,18 +161,19 @@ function automatic logic [`AXI_DATA_W-1:0] axi_test_data(
   x ^= x >> 17;
   x ^= x << 5;
   axi_test_data = x;
+  end
 endfunction
 
 //------------------------------------------------------------------------------
 // 测试 WSTRB 生成：确定性，可产生窄传输（含全 0 拍）。
 // mode 0 = 全 1；mode 1 = 随机窄；mode 2 = 全 0
 //------------------------------------------------------------------------------
-function automatic logic [`AXI_DATA_W/8-1:0] axi_test_strb(
-  input int unsigned strb_seed,
-  input int unsigned beat,
-  input int unsigned mode
-);
-  logic [31:0] x;
+function automatic [`AXI_DATA_W/8-1:0] axi_test_strb;
+  input integer strb_seed;
+  input integer beat;
+  input integer mode;
+  reg [31:0] x;
+  begin
   x = strb_seed ^ (beat * 32'h85EBCA6B) ^ 32'h5A5A5A5A;
   x ^= x << 13;
   x ^= x >> 17;
@@ -174,6 +183,7 @@ function automatic logic [`AXI_DATA_W/8-1:0] axi_test_strb(
     1: axi_test_strb = x[`AXI_DATA_W/8-1:0];
     default: axi_test_strb = '0;
   endcase
+  end
 endfunction
 
 `endif // AXI_DEFS_SVH

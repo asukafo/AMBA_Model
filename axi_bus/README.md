@@ -5,13 +5,15 @@
 ## 快速开始
 
 ```bash
-make sim          # Round-Robin 仲裁构建 + 运行（默认，15 场景 BFM 级验证）
-make sim-fixed    # 固定优先级仲裁构建 + 运行（同场景，策略检查不同）
-make sim-rtl      # RTL 级联调：cfg master + RAM slave + 互联（R1-R6）
-make sim-mix      # 混合拓扑：cfg + pipe × ram + lat（M1-M7，含窄传输）
-make sim-reg      # 寄存器外设：cfg + lite master × reg/ram slave（G1-G6）
-make sim-ext      # 互斥访问 + LFSR 流量：excl + lfsr × ram(excl) + lat（E1-E4）
-make SEED=42 sim  # 指定随机种子
+make sim             # Round-Robin 仲裁构建 + 运行（默认，15 场景 BFM 级验证）
+make sim-fixed       # 固定优先级仲裁构建 + 运行（同场景，策略检查不同）
+make sim-sliced      # 寄存器片构建：互联 slave 侧 5 通道打拍（同 15 场景）
+make sim-rtl         # RTL 级联调：cfg master + RAM slave + 互联（R1-R6）
+make sim-rtl-sliced  # RTL 级联调 + 寄存器片（R1-R6）
+make sim-mix         # 混合拓扑：cfg + pipe × ram + lat（M1-M7，含窄传输）
+make sim-reg         # 寄存器外设：cfg + lite master × reg/ram slave（G1-G6）
+make sim-ext         # 互斥访问 + LFSR 流量：excl + lfsr × ram(excl) + lat（E1-E4）
+make SEED=42 sim     # 指定随机种子
 ```
 
 仿真输出 `axi.vcd` / `axi_rtl.vcd` 波形（gtkwave 可直接打开）。
@@ -24,6 +26,7 @@ rtl/
   axi_arbiter.sv        通用仲裁器（FIXED / RR，授权锁到握手）
   axi_owner_fifo.sv     W 归属 tag FIFO
   axi_decerr.sv         内部 DECERR 响应器（每 master 一份）
+  axi_reg_slice.sv      前向寄存器片（skid buffer，任意通道打拍）
   axi_master_cfg.sv     可综合 master：寄存器配置 + FSM（单事务，支持 WSTRB）
   axi_master_pipe.sv    可综合 master：描述符表驱动、多 outstanding 流水（窄传输）
   axi_master_excl.sv    可综合 master：互斥访问（ARLOCK/AWLOCK + EXOKAY）
@@ -101,11 +104,26 @@ tb/
   读：AR 入队、每笔回一拍 R=DECERR），与 slave W mux 互斥
 - master 侧端口为拍平 packed 向量（每通道字段拼接，`[i*W +: W]` 访问）
 
+## 寄存器片（register slice）
+
+互联参数 `REG_SLICE`（或 `-DAXI_REG_SLICE=1`）在 **slave 侧 5 个通道**插入
+前向寄存器片（rtl/axi_reg_slice.sv），切断仲裁器→mux→slave 端口的组合路径，
+每事务 +1 拍延迟。协议透明——同一套 15 场景与 R1-R6 在切片构建下全 PASS。
+
+设计选择：寄存器片放在**互联内**而不是 reference master/slave 里——
+使用者挂自己的 IP 无需改动即获得打拍收益（Xilinx SmartConnect 同款做法）；
+`axi_reg_slice` 本身是通道级标准件，master/slave 侧需要时同样可复用。
+reference master/slave 有意保持纯组合，以暴露互联的最大组合延迟。
+
+skid buffer 关键正确性（踩坑记录）：`din_ready` 必须恒等于 `dout_ready`，
+使排空拍与上游握手在同一沿完成——否则背压捕获的拍在排空后会被直通
+重放一次（上游"完成当前拍"与下游"消费该拍"不同步）。
+
 ## 配置（-D 宏，见 rtl/axi_defs.svh）
 
 `AXI_N_MASTER` / `AXI_M_SLAVE` / `AXI_ADDR_W` / `AXI_DATA_W` / `AXI_ID_W` /
 `AXI_ARB_POLICY`（0=固定优先级，1=RR）/ `AXI_RESP_POLICY` /
-`AXI_W_FIFO_DEPTH` / `AXI_DECERR_Q`
+`AXI_W_FIFO_DEPTH` / `AXI_DECERR_Q` / `AXI_REG_SLICE`
 
 改规模时需同步改 tb/tb_axi.sv 的地址映射与场景（TB 按 2×2 硬编码）。
 
@@ -126,6 +144,42 @@ tb/
 | S13 | 两 slave 同拍 BVALID 竞争 B 仲裁 |
 | S14 | RREADY 停摆下 R 授权锁持有（无死锁）|
 | S15 | 单 master 多 ID 并发 |
+
+## 路线图（Plan）
+
+已排序的扩展计划（2026-10 规划）：
+
+1. **层级互联（NIC-400 风格）**——用 `axi_interconnect` 级联自身：2×2 小开关
+   组合成 4×4/更大规模，级间插寄存器片。真实 SoC 的拓扑做法（ARM NIC-400
+   就是层级化的小交叉开关网络）：
+   - 上层互联的 slave 端口接下层互联的 master 端口，地址映射分层划分
+   - 验证：层级拓扑场景（跨层路由、同层竞争、级间片不破坏语义）
+   - 需要先抽象"互联的实例即 master/slave 端点"的复用方式（端口已是
+     扁平 packed，天然可互联互接）
+2. **Verilator 双工具验证**——同一套 RTL 在 Verilator 5 上跑通，排除
+   iverilog 特有行为，交叉验证正确性并对比仿真速度
+3. **yosys 综合验证**——跑 `synth` 出面积/资源报告，验证"可综合"承诺
+4. **CI 自动化**——GitHub Actions 跑全部 8 个构建，改动即回归
+5. **独立协议检查器**——SVA 断言的 AXI4 protocol monitor（VALID 稳定性、
+   握手规则、4KB 边界、burst 约束），从各 TB 内联检查中抽出独立化
+6. **数据宽度转换**——32↔64 位 upsize/downsize 适配器（窄突发 lane 拼接、
+   WSTRB 合并、R 拆分），工作量大，最后做
+
+## 代码风格（wire/reg 约定）
+
+本项目按经典 Verilog 风格声明信号类型（不使用 `logic` 统称）：
+
+| 驱动方式 | 声明 |
+|---|---|
+| `assign` 连续赋值 / 实例输出端口连接 | `wire` |
+| `always_ff` / `always_comb` / `initial` / task 过程赋值 | `reg` |
+| 模块输出端口 | 看内部驱动方式：assign 驱动 → `output wire`，过程驱动 → `output reg` |
+| 模块输入端口 | `input wire` |
+| unpacked 数组（memory） | 只能 `reg`（Verilog 语法限制） |
+
+注意：`always_comb` 的输出必须声明为 `reg`——这是 Verilog 的语法要求，
+不代表它综合成寄存器（组合逻辑的过程赋值同样用 reg）。函数为经典
+Verilog 风格（函数名即返回值，输入在函数体内声明）。
 
 ## iverilog 12 兼容性约束（本项目硬性规则，实测踩坑）
 

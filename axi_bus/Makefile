@@ -15,7 +15,7 @@ VVP      := vvp
 FLAGS    := -g2012 -Wall -Irtl -Itb
 
 RTL := rtl/axi_arbiter.sv rtl/axi_owner_fifo.sv rtl/axi_decerr.sv \
-       rtl/axi_interconnect.sv
+       rtl/axi_reg_slice.sv rtl/axi_interconnect.sv
 RTL_REF := rtl/axi_master_cfg.sv rtl/axi_master_pipe.sv \
            rtl/axi_master_excl.sv rtl/axi_master_lfsr.sv rtl/axi_master_lite.sv \
            rtl/axi_slave_ram.sv rtl/axi_slave_lat.sv rtl/axi_slave_reg.sv
@@ -27,7 +27,7 @@ TB_EXT := tb/tb_axi_ext.sv
 
 SEED ?= 1
 
-.PHONY: sim sim-fixed sim-rtl sim-mix sim-reg sim-ext clean
+.PHONY: sim sim-fixed sim-sliced sim-rtl sim-rtl-sliced sim-mix sim-reg sim-ext clean
 
 # RR（默认策略，AXI_ARB_POLICY=1）
 sim: $(RTL) $(TB)
@@ -37,6 +37,13 @@ sim: $(RTL) $(TB)
 # 固定优先级（AW/AR 与 B/R 均 FIXED）
 sim-fixed: FLAGS += -DAXI_ARB_POLICY=0 -DAXI_RESP_POLICY=0
 sim-fixed: sim
+
+# 寄存器片构建：互联 slave 侧 5 通道全部打一拍（同场景验证协议透明性）
+sim-sliced: FLAGS += -DAXI_REG_SLICE=1
+sim-sliced: sim
+
+sim-rtl-sliced: FLAGS += -DAXI_REG_SLICE=1
+sim-rtl-sliced: sim-rtl
 
 # RTL 级联调：可综合 master + RAM slave + 互联（R1-R6 场景）
 sim-rtl: $(RTL) $(RTL_REF) $(TB_RTL)

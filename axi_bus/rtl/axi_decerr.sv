@@ -18,37 +18,37 @@
 module axi_decerr #(
   parameter int AR_Q_DEPTH = `AXI_DECERR_Q
 ) (
-  input  logic                  clk,
-  input  logic                  rstn,
+  input  wire                  clk,
+  input  wire                  rstn,
   // 写地址（互联已把 awvalid 门控为 未命中 && !w_pending）
-  input  logic                  awvalid,
-  input  logic [`AXI_ID_W-1:0]  aw_id,
-  output logic                  awready,
+  input  wire                  awvalid,
+  input  wire [`AXI_ID_W-1:0]  aw_id,
+  output wire                  awready,
   // 写数据（直接从 master 的 W 通道吞拍，只看 valid/last）
-  input  logic                  wvalid,
-  input  logic                  w_last,
-  output logic                  wready,
-  output logic                  w_drain_done,
+  input  wire                  wvalid,
+  input  wire                  w_last,
+  output wire                  wready,
+  output wire                  w_drain_done,
   // 写响应
-  output logic                  bvalid,
-  output logic [`AXI_ID_W-1:0]  b_id,
-  output logic [1:0]            b_resp,
-  input  logic                  bready,
+  output wire                  bvalid,
+  output wire [`AXI_ID_W-1:0]  b_id,
+  output wire [1:0]            b_resp,
+  input  wire                  bready,
   // 读地址（互联已把 arvalid 门控为未命中）
-  input  logic                  arvalid,
-  input  logic [`AXI_ID_W-1:0]  ar_id,
-  output logic                  arready,
+  input  wire                  arvalid,
+  input  wire [`AXI_ID_W-1:0]  ar_id,
+  output wire                  arready,
   // 读数据（单拍，DECERR，RLAST=1）
-  output logic                  rvalid,
-  output logic [`AXI_ID_W-1:0]  r_id,
-  output logic [1:0]            r_resp,
-  input  logic                  rready
+  output wire                  rvalid,
+  output wire [`AXI_ID_W-1:0]  r_id,
+  output wire [1:0]            r_resp,
+  input  wire                  rready
 );
 
   // ---- 写路径 FSM ----
   localparam W_IDLE = 2'd0, W_DRAIN = 2'd1, W_BRESP = 2'd2;
-  logic [1:0]           wstate;
-  logic [`AXI_ID_W-1:0] aw_id_q;
+  reg [1:0]           wstate;
+  reg [`AXI_ID_W-1:0] aw_id_q;
 
   assign awready      = (wstate == W_IDLE);
   assign wready       = (wstate == W_DRAIN);
@@ -84,8 +84,8 @@ module axi_decerr #(
   end
 
   // ---- 读路径：AR ID FIFO，每笔回一拍 DECERR ----
-  logic                 rf_empty, rf_full;
-  logic [`AXI_ID_W-1:0] rf_head;
+  wire                 rf_empty, rf_full;
+  wire [`AXI_ID_W-1:0] rf_head;
 
   assign arready = !rf_full;
   assign rvalid  = !rf_empty;

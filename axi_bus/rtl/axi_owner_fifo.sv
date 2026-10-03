@@ -13,22 +13,22 @@ module axi_owner_fifo #(
   parameter int DEPTH = 2,
   parameter int TAG_W = 1
 ) (
-  input  logic                    clk,
-  input  logic                    rstn,
-  input  logic                    push,
-  input  logic [TAG_W-1:0]        din,
-  input  logic                    pop,
-  output logic [TAG_W-1:0]        head,
-  output logic                    empty,
-  output logic                    full,
-  output logic [$clog2(DEPTH+1)-1:0] count
+  input  wire                    clk,
+  input  wire                    rstn,
+  input  wire                    push,
+  input  wire [TAG_W-1:0]        din,
+  input  wire                    pop,
+  output wire [TAG_W-1:0]        head,
+  output wire                    empty,
+  output wire                    full,
+  output wire [$clog2(DEPTH+1)-1:0] count
 );
 
   localparam PTR_W = (DEPTH > 1) ? $clog2(DEPTH) : 1;
 
-  logic [TAG_W-1:0]            mem [DEPTH];
-  logic [PTR_W-1:0]            wr_ptr, rd_ptr;
-  logic [$clog2(DEPTH+1)-1:0]  count_q;
+  reg [TAG_W-1:0]            mem [DEPTH];
+  reg [PTR_W-1:0]            wr_ptr, rd_ptr;
+  reg [$clog2(DEPTH+1)-1:0]  count_q;
 
   assign head  = mem[rd_ptr];
   assign empty = (count_q == 0);

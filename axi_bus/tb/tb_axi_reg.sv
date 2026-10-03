@@ -18,8 +18,8 @@ module tb_axi_reg;
   localparam MAX_WAIT = 100000;
 
   // ---- 时钟 / 复位 ----
-  logic clk;
-  logic rstn;
+  reg clk;
+  reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
@@ -27,36 +27,38 @@ module tb_axi_reg;
   `include "tb_axi_wires.svh"
   // 直通属性默认 0。注意：prot 的 master1 切片由 lite master 驱动，
   // 这里只覆盖 master0（cfg master 无 prot 端口）
-  initial begin
-    s_awlock = '0; s_awcache = '0;
-    s_awprot[0*3 +: 3] = '0;
-    s_awqos = '0; s_awregion = '0;
-    s_arlock = '0; s_arcache = '0;
-    s_arprot[0*3 +: 3] = '0;
-    s_arqos = '0; s_arregion = '0;
-  end
+  assign s_awlock = '0;
+  assign s_awcache = '0;
+  assign s_awprot[0*3 +: 3] = '0;
+  assign s_awqos = '0;
+  assign s_awregion = '0;
+  assign s_arlock = '0;
+  assign s_arcache = '0;
+  assign s_arprot[0*3 +: 3] = '0;
+  assign s_arqos = '0;
+  assign s_arregion = '0;
 
 
   // ---- master0（cfg）配置 ----
-  logic cfg0_wr_start, cfg0_rd_start;
-  logic [`AXI_ADDR_W-1:0]   cfg0_addr;
-  logic [7:0]               cfg0_len;
-  logic [2:0]               cfg0_size;
-  logic [1:0]               cfg0_burst;
-  logic [`AXI_ID_W-1:0]     cfg0_id;
-  logic [`AXI_DATA_W-1:0]   cfg0_wdata0;
-  logic [`AXI_DATA_W/8-1:0] cfg0_wstrb;
+  reg cfg0_wr_start, cfg0_rd_start;
+  reg [`AXI_ADDR_W-1:0] cfg0_addr;
+  reg [7:0] cfg0_len;
+  reg [2:0] cfg0_size;
+  reg [1:0] cfg0_burst;
+  reg [`AXI_ID_W-1:0] cfg0_id;
+  reg [`AXI_DATA_W-1:0] cfg0_wdata0;
+  reg [`AXI_DATA_W/8-1:0] cfg0_wstrb;
 
   // ---- reg slave 调试读口 ----
-  logic [$clog2(64)-1:0] dbg_sel;
-  logic [`AXI_DATA_W-1:0] dbg_val_c;
+  reg [$clog2(64)-1:0] dbg_sel;
+  wire [`AXI_DATA_W-1:0] dbg_val_c;
 
   // ---- master1（lite）配置 ----
-  logic lite_wr_start, lite_rd_start;
-  logic [`AXI_ADDR_W-1:0]   lite_addr;
-  logic [`AXI_DATA_W-1:0]   lite_wdata;
-  logic [`AXI_DATA_W/8-1:0] lite_wstrb;
-  logic [2:0]               lite_prot;
+  reg lite_wr_start, lite_rd_start;
+  reg [`AXI_ADDR_W-1:0] lite_addr;
+  reg [`AXI_DATA_W-1:0] lite_wdata;
+  reg [`AXI_DATA_W/8-1:0] lite_wstrb;
+  reg [2:0] lite_prot;
 
   // ---- master0：cfg ----
   axi_master_cfg #(
@@ -136,17 +138,15 @@ module tb_axi_reg;
   );
 
   // ---- master1 缺省 AXI4 字段：Lite 子集恒为 单拍/32b/INCR/ID=0/WLAST=1 ----
-  initial begin
-    s_awlen[1*8 +: 8]     = 8'd0;
-    s_awsize[1*3 +: 3]    = 3'd2;
-    s_awburst[1*2 +: 2]   = `AXI_BURST_INCR;
-    s_awid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
-    s_wlast[1]            = 1'b1;   // Lite 单拍恒 WLAST
-    s_arlen[1*8 +: 8]     = 8'd0;
-    s_arsize[1*3 +: 3]    = 3'd2;
-    s_arburst[1*2 +: 2]   = `AXI_BURST_INCR;
-    s_arid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
-  end
+  assign s_awlen[1*8 +: 8]     = 8'd0;
+  assign s_awsize[1*3 +: 3]    = 3'd2;
+  assign s_awburst[1*2 +: 2]   = `AXI_BURST_INCR;
+  assign s_awid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
+  assign s_wlast[1]            = 1'b1;   // Lite 单拍恒 WLAST
+  assign s_arlen[1*8 +: 8]     = 8'd0;
+  assign s_arsize[1*3 +: 3]    = 3'd2;
+  assign s_arburst[1*2 +: 2]   = `AXI_BURST_INCR;
+  assign s_arid[1*`AXI_ID_W +: `AXI_ID_W] = '0;
 
   // slave0：寄存器外设
   axi_slave_reg #(
@@ -188,8 +188,8 @@ module tb_axi_reg;
   );
 
   // ---- slave1：ram 占位 ----
-  logic [`AXI_ADDR_W-1:0] dbg_addr1;
-  logic [7:0] dbg_byte1_c;
+  reg [`AXI_ADDR_W-1:0] dbg_addr1;
+  wire [7:0] dbg_byte1_c;
   axi_slave_ram #(
     .SLV_ID (1)
   ) slv1 (
@@ -239,12 +239,12 @@ module tb_axi_reg;
   //--------------------------------------------------------------------------
   // 驱动：cfg master 写/读（带 WSTRB）
   //--------------------------------------------------------------------------
-  task automatic mst0_wr(input logic [`AXI_ADDR_W-1:0] addr,
-                         input logic [7:0] len, input logic [2:0] size,
-                         input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                         input logic [`AXI_DATA_W-1:0] base,
-                         input logic [`AXI_DATA_W/8-1:0] strb,
-                         output logic [1:0] status);
+  task automatic mst0_wr(input [`AXI_ADDR_W-1:0] addr,
+                         input [7:0] len, input [2:0] size,
+                         input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                         input [`AXI_DATA_W-1:0] base,
+                         input [`AXI_DATA_W/8-1:0] strb,
+                         output [1:0] status);
     integer cnt;
     begin
       cfg0_addr   = addr;
@@ -268,11 +268,11 @@ module tb_axi_reg;
     end
   endtask
 
-  task automatic mst0_rd(input logic [`AXI_ADDR_W-1:0] addr,
-                         input logic [7:0] len, input logic [2:0] size,
-                         input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                         output logic [1:0] status,
-                         output logic [`AXI_DATA_W-1:0] checksum);
+  task automatic mst0_rd(input [`AXI_ADDR_W-1:0] addr,
+                         input [7:0] len, input [2:0] size,
+                         input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                         output [1:0] status,
+                         output [`AXI_DATA_W-1:0] checksum);
     integer cnt;
     begin
       cfg0_addr  = addr;
@@ -296,7 +296,7 @@ module tb_axi_reg;
   endtask
 
   // 读调试口
-  task automatic reg_rd(input integer sel, output logic [`AXI_DATA_W-1:0] v);
+  task automatic reg_rd(input integer sel, output [`AXI_DATA_W-1:0] v);
     begin
       dbg_sel = sel;
       #1;
@@ -311,10 +311,10 @@ module tb_axi_reg;
   //--------------------------------------------------------------------------
   // lite 驱动：写 / 读（master1）
   //--------------------------------------------------------------------------
-  task automatic lite_wr(input logic [`AXI_ADDR_W-1:0] addr,
-                         input logic [`AXI_DATA_W-1:0] data,
-                         input logic [`AXI_DATA_W/8-1:0] strb,
-                         output logic [1:0] status);
+  task automatic lite_wr(input [`AXI_ADDR_W-1:0] addr,
+                         input [`AXI_DATA_W-1:0] data,
+                         input [`AXI_DATA_W/8-1:0] strb,
+                         output [1:0] status);
     integer cnt;
     begin
       lite_addr  = addr;
@@ -334,9 +334,9 @@ module tb_axi_reg;
     end
   endtask
 
-  task automatic lite_rd(input logic [`AXI_ADDR_W-1:0] addr,
-                         output logic [1:0] status,
-                         output logic [`AXI_DATA_W-1:0] data);
+  task automatic lite_rd(input [`AXI_ADDR_W-1:0] addr,
+                         output [1:0] status,
+                         output [`AXI_DATA_W-1:0] data);
     integer cnt;
     begin
       lite_addr = addr;
@@ -357,8 +357,8 @@ module tb_axi_reg;
 
   // G1：寄存器写（全字 + WSTRB 部分写）+ 读回
   task automatic g1();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] v, chk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] v, chk;
     begin
       // 全字写 reg[8]（地址 0x20）
       mst0_wr(32'h0000_0020, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0,
@@ -384,8 +384,8 @@ module tb_axi_reg;
 
   // G2：突发写读寄存器（reg[16..23]，数据 = base + 拍号）
   task automatic g2();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk, echk, v;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk, echk, v;
     begin
       mst0_wr(32'h0000_0040, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd0,
               32'hAAAA_0000, 4'hF, st);
@@ -406,8 +406,8 @@ module tb_axi_reg;
 
   // G3：DECERR 访问
   task automatic g3();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk;
     begin
       mst0_wr(32'h8000_0000, 8'd0, 3'd2, `AXI_BURST_FIXED, 4'd0,
               32'h0, 4'hF, st);
@@ -422,8 +422,8 @@ module tb_axi_reg;
   // G4：Lite master 写读寄存器（部分写）
   //==========================================================================
   task automatic g4();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] d, v;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] d, v;
     begin
       // 全字写 reg[10]（地址 0x28）
       lite_wr(32'h0000_0028, 32'hDEAD_BEEF, 4'hF, st);
@@ -447,8 +447,8 @@ module tb_axi_reg;
   // G5：cfg（m0）+ lite（m1）并发访问不同 slave
   //==========================================================================
   task automatic g5();
-    logic [1:0] st0, st1;
-    logic [`AXI_DATA_W-1:0] v5;
+    reg [1:0] st0, st1;
+    reg [`AXI_DATA_W-1:0] v5;
     begin
       fork
         begin
@@ -473,8 +473,8 @@ module tb_axi_reg;
   // G6：Lite master DECERR 访问
   //==========================================================================
   task automatic g6();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] d;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] d;
     begin
       lite_wr(32'h8000_0000, 32'h0, 4'hF, st);
       chk(st == 3, "G6 lite wr DECERR status");

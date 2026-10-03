@@ -22,8 +22,8 @@ module tb_axi_ext;
   localparam MAX_WAIT = 200000;
 
   // ---- 时钟 / 复位 ----
-  logic clk;
-  logic rstn;
+  reg clk;
+  reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
@@ -31,22 +31,22 @@ module tb_axi_ext;
   `include "tb_axi_wires.svh"
 
   // ---- master0（excl）配置 ----
-  logic excl_start;
-  logic [`AXI_ADDR_W-1:0]   excl_addr;
-  logic [7:0]               excl_len;
-  logic [2:0]               excl_size;
-  logic [1:0]               excl_burst;
-  logic [`AXI_ID_W-1:0]     excl_id;
-  logic [`AXI_DATA_W-1:0]   excl_wdata0;
-  logic [7:0]               excl_wr_delay;
+  reg excl_start;
+  reg [`AXI_ADDR_W-1:0] excl_addr;
+  reg [7:0] excl_len;
+  reg [2:0] excl_size;
+  reg [1:0] excl_burst;
+  reg [`AXI_ID_W-1:0] excl_id;
+  reg [`AXI_DATA_W-1:0] excl_wdata0;
+  reg [7:0] excl_wr_delay;
 
   // ---- master1（lfsr）配置 ----
-  logic lfsr_enable;
-  logic [15:0] lfsr_tx_max;
-  logic [`AXI_ADDR_W-1:0]   lfsr_base;
-  logic [`AXI_ADDR_W-1:0]   lfsr_mask;
-  logic [31:0]              lfsr_seed;
-  logic [15:0]              lfsr_gen_cnt;
+  reg lfsr_enable;
+  reg [15:0] lfsr_tx_max;
+  reg [`AXI_ADDR_W-1:0] lfsr_base;
+  reg [`AXI_ADDR_W-1:0] lfsr_mask;
+  reg [31:0] lfsr_seed;
+  reg [15:0] lfsr_gen_cnt;
 
   // ---- master0：excl ----
   axi_master_excl #(
@@ -137,14 +137,20 @@ module tb_axi_ext;
   );
 
   // ---- 直通属性：master1（lfsr）lock 恒 0；excl 驱动 master0 的 lock ----
-  initial begin
-    s_awlock[1*2]    = 1'b0; s_awlock[1*2+1] = 1'b0;
-    s_arlock[1*2]    = 1'b0; s_arlock[1*2+1] = 1'b0;
-    s_awlock[0*2+1]  = 1'b0;   // excl 只驱动 bit0
-    s_arlock[0*2+1]  = 1'b0;
-    s_awcache = '0; s_awprot = '0; s_awqos = '0; s_awregion = '0;
-    s_arcache = '0; s_arprot = '0; s_arqos = '0; s_arregion = '0;
-  end
+  assign s_awlock[1*2]    = 1'b0;
+  assign s_awlock[1*2+1]  = 1'b0;
+  assign s_arlock[1*2]    = 1'b0;
+  assign s_arlock[1*2+1]  = 1'b0;
+  assign s_awlock[0*2+1]  = 1'b0;   // excl 只驱动 bit0
+  assign s_arlock[0*2+1]  = 1'b0;
+  assign s_awcache = '0;
+  assign s_awprot = '0;
+  assign s_awqos = '0;
+  assign s_awregion = '0;
+  assign s_arcache = '0;
+  assign s_arprot = '0;
+  assign s_arqos = '0;
+  assign s_arregion = '0;
 
   // ---- slave0：ram（互斥监视器）----
   axi_slave_ram #(
@@ -228,43 +234,43 @@ module tb_axi_ext;
     .dbg_byte (dbg_byte1_c)
   );
 
-  logic [`AXI_ADDR_W-1:0] dbg_addr0, dbg_addr1;
-  logic [7:0] dbg_byte0_c, dbg_byte1_c;
-  logic [7:0] lat_b_delay, lat_r_delay;
-  logic [1:0] lat_err_mode;
-  logic [7:0] lat_err_period;
+  reg [`AXI_ADDR_W-1:0] dbg_addr0, dbg_addr1;
+  wire [7:0] dbg_byte0_c, dbg_byte1_c;
+  reg [7:0] lat_b_delay, lat_r_delay;
+  reg [1:0] lat_err_mode;
+  reg [7:0] lat_err_period;
 
   //--------------------------------------------------------------------------
   // 参考内存
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
-  logic [7:0] ref_mem [0:SB_DEPTH-1];
+  reg [7:0] ref_mem [0:SB_DEPTH-1];
   initial begin
     for (int i = 0; i < SB_DEPTH; i++)
       ref_mem[i] = 8'h00;
   end
 
-  function automatic integer slave_of(input logic [`AXI_ADDR_W-1:0] a);
+  function automatic integer slave_of(input [`AXI_ADDR_W-1:0] a);
     if ((a & 32'hF000_0000) == 32'h0000_0000) slave_of = 0;
     else if ((a & 32'hF000_0000) == 32'h1000_0000) slave_of = 1;
     else slave_of = -1;
   endfunction
 
   task automatic ref_update(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_DATA_W-1:0] base
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_DATA_W-1:0] base
   );
     integer s;
     begin
       s = slave_of(addr);
       if (s >= 0) begin
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [`AXI_DATA_W-1:0] d;
-          logic [`AXI_DATA_W/8-1:0] st;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_DATA_W-1:0] d;
+          reg [`AXI_DATA_W/8-1:0] st;
           a  = axi_beat_addr(addr, burst, size, len, b);
           d  = base + b;
           st = axi_strb_for_size(size, a);
@@ -280,8 +286,8 @@ module tb_axi_ext;
     begin
       for (int s = 0; s < `AXI_M_SLAVE; s++) begin
         for (int i = 0; i < 4096; i++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [7:0] b;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [7:0] b;
           a = (s == 0) ? 32'h0000_0000 + i : 32'h1000_0000 + i;
           if (s == 0) begin dbg_addr0 = a; #1; b = dbg_byte0_c; end
           else        begin dbg_addr1 = a; #1; b = dbg_byte1_c; end
@@ -305,11 +311,11 @@ module tb_axi_ext;
   //--------------------------------------------------------------------------
   // 驱动：excl master
   //--------------------------------------------------------------------------
-  task automatic excl_run(input logic [`AXI_ADDR_W-1:0] addr,
-                          input logic [7:0] len, input logic [2:0] size,
-                          input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                          input logic [`AXI_DATA_W-1:0] base,
-                          input logic [7:0] wr_delay);
+  task automatic excl_run(input [`AXI_ADDR_W-1:0] addr,
+                          input [7:0] len, input [2:0] size,
+                          input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                          input [`AXI_DATA_W-1:0] base,
+                          input [7:0] wr_delay);
     integer cnt;
     begin
       excl_addr     = addr;
@@ -335,10 +341,10 @@ module tb_axi_ext;
   //--------------------------------------------------------------------------
   // 驱动：lfsr master
   //--------------------------------------------------------------------------
-  task automatic lfsr_run(input logic [15:0] tx_max,
-                          input logic [`AXI_ADDR_W-1:0] base,
-                          input logic [`AXI_ADDR_W-1:0] mask,
-                          input logic [31:0] seed);
+  task automatic lfsr_run(input [15:0] tx_max,
+                          input [`AXI_ADDR_W-1:0] base,
+                          input [`AXI_ADDR_W-1:0] mask,
+                          input [31:0] seed);
     integer cnt;
     begin
       lfsr_tx_max = tx_max;
@@ -386,7 +392,7 @@ module tb_axi_ext;
   // E2：互斥丢失（读写之间被另一 master 普通写打断 → 写回 OKAY）
   //==========================================================================
   task automatic e2();
-    logic [31:0] seed;
+    reg [31:0] seed;
     begin
       // 找一个 bit0=0（首笔为写）的种子；首笔参数直接取 seed：
       // dir=seed[0]、len=seed[7:5]、wdata0=seed
@@ -408,7 +414,7 @@ module tb_axi_ext;
       chk(mst1.resp_err == 1'b0, "E2 lfsr no err");
       ref_update(32'h0000_0200, `AXI_BURST_INCR, 3'd2, 8'd1, 32'hA200_0000);
       begin
-        logic [7:0] ln;
+        reg [7:0] ln;
         ln = seed[7:5];
         ref_update(32'h0000_0300, `AXI_BURST_INCR, 3'd2, ln, seed);
       end
@@ -420,14 +426,14 @@ module tb_axi_ext;
   //==========================================================================
   // E3：LFSR soak（两个窗口各 60 笔）
   //==========================================================================
-  logic [`AXI_DATA_W-1:0] exp_acc;
+  reg [`AXI_DATA_W-1:0] exp_acc;
   initial exp_acc = '0;
 
   // 读事务发出时按参考内存快照累加期望校验和（单 outstanding：发出时==读出时）
   always @(posedge clk) begin
     if (lfsr_enable && mst1.tx_vld && mst1.tx_dir) begin
       for (int b = 0; b <= mst1.tx_len; b++) begin
-        logic [`AXI_ADDR_W-1:0] a, wb;
+        reg [`AXI_ADDR_W-1:0] a, wb;
         integer s;
         a = axi_beat_addr(mst1.tx_addr, `AXI_BURST_INCR, 3'd2, mst1.tx_len, b);
         s = slave_of(a);

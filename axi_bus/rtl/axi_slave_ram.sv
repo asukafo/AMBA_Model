@@ -19,90 +19,90 @@ module axi_slave_ram #(
   parameter int AW_Q   = 4,
   parameter int AR_Q   = 4
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- AW ----
-  input  logic awvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] awid,
-  input  logic [`AXI_ADDR_W-1:0]   awaddr,
-  input  logic [7:0]               awlen,
-  input  logic [2:0]               awsize,
-  input  logic [1:0]               awburst,
-  input  logic                     awlock,   // 互斥写（AWLOCK=1）
-  output logic awready,
+  input  wire awvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] awid,
+  input  wire [`AXI_ADDR_W-1:0]   awaddr,
+  input  wire [7:0]               awlen,
+  input  wire [2:0]               awsize,
+  input  wire [1:0]               awburst,
+  input  wire                     awlock,   // 互斥写（AWLOCK=1）
+  output wire awready,
   // ---- W ----
-  input  logic wvalid,
-  input  logic [`AXI_DATA_W-1:0]   wdata,
-  input  logic [`AXI_DATA_W/8-1:0] wstrb,
-  input  logic wlast,
-  output logic wready,
+  input  wire wvalid,
+  input  wire [`AXI_DATA_W-1:0]   wdata,
+  input  wire [`AXI_DATA_W/8-1:0] wstrb,
+  input  wire wlast,
+  output wire wready,
   // ---- B ----
-  output logic bvalid,
-  output logic [`AXI_SLV_ID_W-1:0] bid,
-  output logic [1:0] bresp,
-  input  logic bready,
+  output wire bvalid,
+  output wire [`AXI_SLV_ID_W-1:0] bid,
+  output wire [1:0] bresp,
+  input  wire bready,
   // ---- AR ----
-  input  logic arvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] arid,
-  input  logic [`AXI_ADDR_W-1:0]   araddr,
-  input  logic [7:0]               arlen,
-  input  logic [2:0]               arsize,
-  input  logic [1:0]               arburst,
-  input  logic                     arlock,   // 互斥读（ARLOCK=1）
-  output logic arready,
+  input  wire arvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] arid,
+  input  wire [`AXI_ADDR_W-1:0]   araddr,
+  input  wire [7:0]               arlen,
+  input  wire [2:0]               arsize,
+  input  wire [1:0]               arburst,
+  input  wire                     arlock,   // 互斥读（ARLOCK=1）
+  output wire arready,
   // ---- R ----
-  output logic rvalid,
-  output logic [`AXI_SLV_ID_W-1:0] rid,
-  output logic [`AXI_DATA_W-1:0]   rdata,
-  output logic [1:0]               rresp,
-  output logic rlast,
-  input  logic rready,
+  output reg rvalid,
+  output reg [`AXI_SLV_ID_W-1:0] rid,
+  output reg [`AXI_DATA_W-1:0]   rdata,
+  output reg [1:0]               rresp,
+  output reg rlast,
+  input  wire rready,
   // ---- 调试读口（TB 校验内存，组合读出）----
-  input  logic [`AXI_ADDR_W-1:0]   dbg_addr,
-  output logic [7:0]               dbg_byte
+  input  wire [`AXI_ADDR_W-1:0]   dbg_addr,
+  output wire [7:0]               dbg_byte
 );
 
   localparam A_W = $clog2(DEPTH);
 
-  logic [7:0] mem [0:DEPTH-1];
+  reg [7:0] mem [0:DEPTH-1];
   initial begin
     for (int i = 0; i < DEPTH; i++)
       mem[i] = 8'h00;
   end
 
   // ---- AW 队列 ----
-  logic [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
-  logic [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
-  logic [7:0]               awq_len   [0:AW_Q-1];
-  logic [2:0]               awq_size  [0:AW_Q-1];
-  logic [1:0]               awq_burst [0:AW_Q-1];
-  logic                     awq_exok  [0:AW_Q-1];  // 互斥写成功标记
-  logic [$clog2(AW_Q)-1:0]  awq_wr, awq_rd;
-  logic [$clog2(AW_Q+1)-1:0] awq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
+  reg [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
+  reg [7:0]               awq_len   [0:AW_Q-1];
+  reg [2:0]               awq_size  [0:AW_Q-1];
+  reg [1:0]               awq_burst [0:AW_Q-1];
+  reg                     awq_exok  [0:AW_Q-1];  // 互斥写成功标记
+  reg [$clog2(AW_Q)-1:0]  awq_wr, awq_rd;
+  reg [$clog2(AW_Q+1)-1:0] awq_cnt;
 
   // ---- B 队列（ID + 互斥成功标记）----
-  logic [`AXI_SLV_ID_W-1:0] bq_id  [0:AW_Q-1];
-  logic                     bq_exok [0:AW_Q-1];
-  logic [$clog2(AW_Q)-1:0]  bq_wr, bq_rd;
-  logic [$clog2(AW_Q+1)-1:0] bq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] bq_id  [0:AW_Q-1];
+  reg                     bq_exok [0:AW_Q-1];
+  reg [$clog2(AW_Q)-1:0]  bq_wr, bq_rd;
+  reg [$clog2(AW_Q+1)-1:0] bq_cnt;
 
   // ---- AR 队列 ----
-  logic [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
-  logic [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
-  logic [7:0]               arq_len   [0:AR_Q-1];
-  logic [2:0]               arq_size  [0:AR_Q-1];
-  logic [1:0]               arq_burst [0:AR_Q-1];
-  logic                     arq_excl  [0:AR_Q-1];  // 互斥读标记
-  logic [$clog2(AR_Q)-1:0]  arq_wr, arq_rd;
-  logic [$clog2(AR_Q+1)-1:0] arq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
+  reg [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
+  reg [7:0]               arq_len   [0:AR_Q-1];
+  reg [2:0]               arq_size  [0:AR_Q-1];
+  reg [1:0]               arq_burst [0:AR_Q-1];
+  reg                     arq_excl  [0:AR_Q-1];  // 互斥读标记
+  reg [$clog2(AR_Q)-1:0]  arq_wr, arq_rd;
+  reg [$clog2(AR_Q+1)-1:0] arq_cnt;
 
   // ---- 互斥监视器（简化版：全局单一监视点，非按地址）----
-  logic                     excl_own;
-  logic [`AXI_SLV_ID_W-1:0] excl_id;
+  reg                     excl_own;
+  reg [`AXI_SLV_ID_W-1:0] excl_id;
 
   // ---- 拍计数 / 组合地址 ----
-  logic [7:0]               w_beat_cnt, r_beat_cnt;
-  logic [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
+  reg [7:0]               w_beat_cnt, r_beat_cnt;
+  reg [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
 
   assign awready = (awq_cnt < AW_Q);
   assign wready  = (awq_cnt > 0);

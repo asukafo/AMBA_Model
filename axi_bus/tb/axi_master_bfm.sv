@@ -18,97 +18,101 @@ module axi_master_bfm #(
   parameter int MST_ID   = 0,
   parameter int MAX_WAIT = 20000
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // AW
-  output logic awvalid,
-  output logic [`AXI_ID_W-1:0]   awid,
-  output logic [`AXI_ADDR_W-1:0] awaddr,
-  output logic [7:0]             awlen,
-  output logic [2:0]             awsize,
-  output logic [1:0]             awburst,
-  input  logic awready,
+  output reg awvalid,
+  output reg [`AXI_ID_W-1:0]   awid,
+  output reg [`AXI_ADDR_W-1:0] awaddr,
+  output reg [7:0]             awlen,
+  output reg [2:0]             awsize,
+  output reg [1:0]             awburst,
+  input  wire awready,
   // W
-  output logic wvalid,
-  output logic [`AXI_DATA_W-1:0]   wdata,
-  output logic [`AXI_DATA_W/8-1:0] wstrb,
-  output logic wlast,
-  input  logic wready,
+  output reg wvalid,
+  output reg [`AXI_DATA_W-1:0]   wdata,
+  output reg [`AXI_DATA_W/8-1:0] wstrb,
+  output reg wlast,
+  input  wire wready,
   // B
-  input  logic bvalid,
-  input  logic [`AXI_ID_W-1:0] bid,
-  input  logic [1:0] bresp,
-  output logic bready,
+  input  wire bvalid,
+  input  wire [`AXI_ID_W-1:0] bid,
+  input  wire [1:0] bresp,
+  output reg bready,
   // AR
-  output logic arvalid,
-  output logic [`AXI_ID_W-1:0]   arid,
-  output logic [`AXI_ADDR_W-1:0] araddr,
-  output logic [7:0]             arlen,
-  output logic [2:0]             arsize,
-  output logic [1:0]             arburst,
-  input  logic arready,
+  output reg arvalid,
+  output reg [`AXI_ID_W-1:0]   arid,
+  output reg [`AXI_ADDR_W-1:0] araddr,
+  output reg [7:0]             arlen,
+  output reg [2:0]             arsize,
+  output reg [1:0]             arburst,
+  input  wire arready,
   // R
-  input  logic rvalid,
-  input  logic [`AXI_ID_W-1:0] rid,
-  input  logic [`AXI_DATA_W-1:0] rdata,
-  input  logic [1:0] rresp,
-  input  logic rlast,
-  output logic rready
+  input  wire rvalid,
+  input  wire [`AXI_ID_W-1:0] rid,
+  input  wire [`AXI_DATA_W-1:0] rdata,
+  input  wire [1:0] rresp,
+  input  wire rlast,
+  output reg rready
 );
 
   // ---- 观测信号（TB 通过层级引用 g_mst[i].bfm.<name> 访问）----
   // 注意：iverilog 无法驱动 unpacked 数组输出端口（静默 X），
   // 观测信号一律放内部，不做端口
-  logic [1:0]  last_resp;
-  time         w_done_time;
-  time         w_first_hs_time;
-  logic [7:0]  ar_done_order [0:7];
-  integer      ar_recv_resp [0:7];
-  integer      ar_done_cnt;
+  reg [1:0]  last_resp;
+  time       w_done_time;
+  time       w_first_hs_time;
+  reg [7:0]  ar_done_order [0:7];
+  integer    ar_recv_resp [0:7];
+  integer    ar_done_cnt;
 
   // 待发送 W 的写（至多一条，与互联 w_pending 规则一致）
-  logic             pw_active;
-  logic [`AXI_ID_W-1:0] pw_id;
-  logic [7:0]       pw_len;
+  reg                  pw_active;
+  reg [`AXI_ID_W-1:0]  pw_id;
+  reg [7:0]            pw_len;
 
   // outstanding 读表（8 槽）
-  logic [7:0]              arq_active;
-  logic [`AXI_ID_W-1:0]   arq_id    [0:7];
-  logic [`AXI_ADDR_W-1:0] arq_addr  [0:7];
-  logic [7:0]             arq_len   [0:7];
-  logic [2:0]             arq_size  [0:7];
-  logic [1:0]             arq_burst [0:7];
-  integer                 arq_seed      [0:7];
-  integer                 arq_strb_seed [0:7];
-  integer                 arq_strb_mode [0:7];  // 0 全1 / 1 窄 / 2 全0
-  integer                 arq_exp_mode  [0:7];  // 0 期望生成数据 / 1 期望 0
-  integer                 arq_exp_resp  [0:7];  // 0 OKAY / 3 DECERR
-  integer                 arq_beat      [0:7];  // 已收拍数
+  reg [7:0]              arq_active;
+  reg [`AXI_ID_W-1:0]   arq_id    [0:7];
+  reg [`AXI_ADDR_W-1:0] arq_addr  [0:7];
+  reg [7:0]             arq_len   [0:7];
+  reg [2:0]             arq_size  [0:7];
+  reg [1:0]             arq_burst [0:7];
+  integer               arq_seed      [0:7];
+  integer               arq_strb_seed [0:7];
+  integer               arq_strb_mode [0:7];  // 0 全1 / 1 窄 / 2 全0
+  integer               arq_exp_mode  [0:7];  // 0 期望生成数据 / 1 期望 0
+  integer               arq_exp_resp  [0:7];  // 0 OKAY / 3 DECERR
+  integer               arq_beat      [0:7];  // 已收拍数
 
   // 期望读数据：按写时的 strb 掩码合并（未写字节期望 0）
-  function automatic logic [`AXI_DATA_W-1:0] expected_word(input integer slot,
-                                                          input integer beat);
-    logic [`AXI_ADDR_W-1:0] a;
-    logic [`AXI_DATA_W-1:0] d;
-    logic [`AXI_DATA_W/8-1:0] st;
+  function automatic [`AXI_DATA_W-1:0] expected_word;
+    input integer slot;
+    input integer beat;
+    reg [`AXI_ADDR_W-1:0] a;
+    reg [`AXI_DATA_W-1:0] d;
+    reg [`AXI_DATA_W/8-1:0] st;
+    integer i;
+    begin
     a = axi_beat_addr(arq_addr[slot], arq_burst[slot], arq_size[slot],
                       arq_len[slot], beat);
     d  = axi_test_data(arq_seed[slot], beat);
     st = axi_test_strb(arq_strb_seed[slot], beat, arq_strb_mode[slot]);
-    for (int i = 0; i < `AXI_DATA_W/8; i++)
+    for (i = 0; i < `AXI_DATA_W/8; i = i + 1)
       if (!st[i]) d[8*i +: 8] = 8'h00;
     expected_word = d;
+    end
   endfunction
 
   //--------------------------------------------------------------------------
   // aw_only：发 AW，等握手，登记待发 W
   //--------------------------------------------------------------------------
   task automatic aw_only(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_ID_W-1:0] id
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_ID_W-1:0] id
   );
     integer cnt;
     begin
@@ -177,7 +181,7 @@ module axi_master_bfm #(
   //--------------------------------------------------------------------------
   // wait_b：等 B 响应，核对 ID，返回 resp
   //--------------------------------------------------------------------------
-  task automatic wait_b(input logic [`AXI_ID_W-1:0] exp_id,
+  task automatic wait_b(input [`AXI_ID_W-1:0] exp_id,
                         output integer resp);
     integer cnt;
     begin
@@ -202,11 +206,11 @@ module axi_master_bfm #(
   // write：完整写事务（aw_only + w_only + wait_b）
   //--------------------------------------------------------------------------
   task automatic write(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_ID_W-1:0] id,
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_ID_W-1:0] id,
     input integer seed,
     input integer strb_seed,
     input integer strb_mode,
@@ -223,11 +227,11 @@ module axi_master_bfm #(
   // ar_only：发 AR，等握手，登记 outstanding 读表
   //--------------------------------------------------------------------------
   task automatic ar_only(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_ID_W-1:0] id,
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_ID_W-1:0] id,
     input integer seed,
     input integer strb_seed,
     input integer strb_mode,
@@ -288,7 +292,7 @@ module axi_master_bfm #(
   task automatic collect_all(input integer stall_after,
                              input integer stall_cycles);
     integer cnt, beats, slot, found;
-    logic stalled;
+    reg stalled;
     begin
       beats = 0;
       stalled = 1'b0;
@@ -364,11 +368,11 @@ module axi_master_bfm #(
   //   exp_resp 0 = OKAY；3 = DECERR
   //--------------------------------------------------------------------------
   task automatic read(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_ID_W-1:0] id,
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_ID_W-1:0] id,
     input integer seed,
     input integer strb_seed,
     input integer strb_mode,

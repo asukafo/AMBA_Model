@@ -17,92 +17,92 @@ module axi_slave_lat #(
   parameter int AW_Q   = 4,
   parameter int AR_Q   = 4
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 配置（软件侧，运行时生效）----
-  input  logic [7:0] cfg_b_delay,    // B 响应延迟（拍）
-  input  logic [7:0] cfg_r_delay,    // R 首拍延迟（拍）
-  input  logic [1:0] cfg_err_mode,   // 0 正常 / 1 全 SLVERR / 2 每第 N 笔
-  input  logic [7:0] cfg_err_period, // mode 2 的周期 N
+  input  wire [7:0] cfg_b_delay,    // B 响应延迟（拍）
+  input  wire [7:0] cfg_r_delay,    // R 首拍延迟（拍）
+  input  wire [1:0] cfg_err_mode,   // 0 正常 / 1 全 SLVERR / 2 每第 N 笔
+  input  wire [7:0] cfg_err_period, // mode 2 的周期 N
   // ---- AW ----
-  input  logic awvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] awid,
-  input  logic [`AXI_ADDR_W-1:0]   awaddr,
-  input  logic [7:0]               awlen,
-  input  logic [2:0]               awsize,
-  input  logic [1:0]               awburst,
-  output logic awready,
+  input  wire awvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] awid,
+  input  wire [`AXI_ADDR_W-1:0]   awaddr,
+  input  wire [7:0]               awlen,
+  input  wire [2:0]               awsize,
+  input  wire [1:0]               awburst,
+  output wire awready,
   // ---- W ----
-  input  logic wvalid,
-  input  logic [`AXI_DATA_W-1:0]   wdata,
-  input  logic [`AXI_DATA_W/8-1:0] wstrb,
-  input  logic wlast,
-  output logic wready,
+  input  wire wvalid,
+  input  wire [`AXI_DATA_W-1:0]   wdata,
+  input  wire [`AXI_DATA_W/8-1:0] wstrb,
+  input  wire wlast,
+  output wire wready,
   // ---- B ----
-  output logic bvalid,
-  output logic [`AXI_SLV_ID_W-1:0] bid,
-  output logic [1:0] bresp,
-  input  logic bready,
+  output wire bvalid,
+  output wire [`AXI_SLV_ID_W-1:0] bid,
+  output wire [1:0] bresp,
+  input  wire bready,
   // ---- AR ----
-  input  logic arvalid,
-  input  logic [`AXI_SLV_ID_W-1:0] arid,
-  input  logic [`AXI_ADDR_W-1:0]   araddr,
-  input  logic [7:0]               arlen,
-  input  logic [2:0]               arsize,
-  input  logic [1:0]               arburst,
-  output logic arready,
+  input  wire arvalid,
+  input  wire [`AXI_SLV_ID_W-1:0] arid,
+  input  wire [`AXI_ADDR_W-1:0]   araddr,
+  input  wire [7:0]               arlen,
+  input  wire [2:0]               arsize,
+  input  wire [1:0]               arburst,
+  output wire arready,
   // ---- R ----
-  output logic rvalid,
-  output logic [`AXI_SLV_ID_W-1:0] rid,
-  output logic [`AXI_DATA_W-1:0]   rdata,
-  output logic [1:0]               rresp,
-  output logic rlast,
-  input  logic rready,
+  output reg rvalid,
+  output reg [`AXI_SLV_ID_W-1:0] rid,
+  output reg [`AXI_DATA_W-1:0]   rdata,
+  output reg [1:0]               rresp,
+  output reg rlast,
+  input  wire rready,
   // ---- 调试读口（TB 校验内存，组合读出）----
-  input  logic [`AXI_ADDR_W-1:0]   dbg_addr,
-  output logic [7:0]               dbg_byte
+  input  wire [`AXI_ADDR_W-1:0]   dbg_addr,
+  output wire [7:0]               dbg_byte
 );
 
   localparam A_W = $clog2(DEPTH);
 
-  logic [7:0] mem [0:DEPTH-1];
+  reg [7:0] mem [0:DEPTH-1];
   initial begin
     for (int i = 0; i < DEPTH; i++)
       mem[i] = 8'h00;
   end
 
   // ---- AW 队列 ----
-  logic [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
-  logic [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
-  logic [7:0]               awq_len   [0:AW_Q-1];
-  logic [2:0]               awq_size  [0:AW_Q-1];
-  logic [1:0]               awq_burst [0:AW_Q-1];
-  logic [$clog2(AW_Q)-1:0]  awq_wr, awq_rd;
-  logic [$clog2(AW_Q+1)-1:0] awq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] awq_id    [0:AW_Q-1];
+  reg [`AXI_ADDR_W-1:0]   awq_addr  [0:AW_Q-1];
+  reg [7:0]               awq_len   [0:AW_Q-1];
+  reg [2:0]               awq_size  [0:AW_Q-1];
+  reg [1:0]               awq_burst [0:AW_Q-1];
+  reg [$clog2(AW_Q)-1:0]  awq_wr, awq_rd;
+  reg [$clog2(AW_Q+1)-1:0] awq_cnt;
 
   // ---- B 队列（ID + 错误标记）----
-  logic [`AXI_SLV_ID_W-1:0] bq_id   [0:AW_Q-1];
-  logic                     bq_err  [0:AW_Q-1];
-  logic [$clog2(AW_Q)-1:0]  bq_wr, bq_rd;
-  logic [$clog2(AW_Q+1)-1:0] bq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] bq_id   [0:AW_Q-1];
+  reg                     bq_err  [0:AW_Q-1];
+  reg [$clog2(AW_Q)-1:0]  bq_wr, bq_rd;
+  reg [$clog2(AW_Q+1)-1:0] bq_cnt;
 
   // ---- AR 队列 ----
-  logic [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
-  logic [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
-  logic [7:0]               arq_len   [0:AR_Q-1];
-  logic [2:0]               arq_size  [0:AR_Q-1];
-  logic [1:0]               arq_burst [0:AR_Q-1];
-  logic [$clog2(AR_Q)-1:0]  arq_wr, arq_rd;
-  logic [$clog2(AR_Q+1)-1:0] arq_cnt;
+  reg [`AXI_SLV_ID_W-1:0] arq_id    [0:AR_Q-1];
+  reg [`AXI_ADDR_W-1:0]   arq_addr  [0:AR_Q-1];
+  reg [7:0]               arq_len   [0:AR_Q-1];
+  reg [2:0]               arq_size  [0:AR_Q-1];
+  reg [1:0]               arq_burst [0:AR_Q-1];
+  reg [$clog2(AR_Q)-1:0]  arq_wr, arq_rd;
+  reg [$clog2(AR_Q+1)-1:0] arq_cnt;
 
   // ---- 拍计数 / 延迟 / 错误注入 ----
-  logic [7:0]               w_beat_cnt, r_beat_cnt;
-  logic [7:0]               b_delay_cnt, r_delay_cnt;
-  logic [7:0]               b_txn_cnt, r_txn_cnt;   // 已完成事务计数（错误周期）
-  logic [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
+  reg [7:0]               w_beat_cnt, r_beat_cnt;
+  reg [7:0]               b_delay_cnt, r_delay_cnt;
+  reg [7:0]               b_txn_cnt, r_txn_cnt;   // 已完成事务计数（错误周期）
+  reg [`AXI_ADDR_W-1:0]   w_addr_c, r_addr_c;
 
   // 错误判定（组合）：mode 1 全错；mode 2 每第 N 笔错（计数从 1 起）
-  logic b_err_c, r_err_c;
+  reg b_err_c, r_err_c;
   always_comb begin
     if (cfg_err_mode == 2'd1) begin
       b_err_c = 1'b1;

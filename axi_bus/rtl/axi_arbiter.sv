@@ -15,25 +15,30 @@ module axi_arbiter #(
   parameter int N      = 2,
   parameter int POLICY = 1
 ) (
-  input  logic         clk,
-  input  logic         rstn,
-  input  logic [N-1:0] req,
-  input  logic         ack,
-  output logic [N-1:0] grant
+  input  wire         clk,
+  input  wire         rstn,
+  input  wire [N-1:0] req,
+  input  wire         ack,
+  output wire [N-1:0] grant
 );
 
   localparam PTR_W = (N > 1) ? $clog2(N) : 1;
 
-  logic [N-1:0]      grant_q, pick;
-  logic [PTR_W-1:0]  rr_ptr;
+  reg [N-1:0]      grant_q, pick;
+  reg [PTR_W-1:0]  rr_ptr;
 
-  function automatic int unsigned onehot_idx(input logic [N-1:0] v);
-    for (int i = 0; i < N; i++) if (v[i]) return i;
-    return 0;
+  function automatic integer onehot_idx;
+    input [N-1:0] v;
+    integer i;
+    begin
+      onehot_idx = 0;
+      for (i = 0; i < N; i = i + 1)
+        if (v[i]) onehot_idx = i;
+    end
   endfunction
 
   // 组合挑选（仅在无授权时被采样）
-  logic found;
+  reg found;
   always_comb begin
     pick  = '0;
     found = 1'b0;

@@ -21,58 +21,58 @@ module axi_master_cfg #(
   parameter int DATA_WIDTH = `AXI_DATA_W,
   parameter int ID_WIDTH   = `AXI_ID_W
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 配置 / 状态（软件侧）----
-  input  logic                  wr_start,   // 写事务启动脉冲
-  input  logic                  rd_start,   // 读事务启动脉冲
-  input  logic [ADDR_WIDTH-1:0] cfg_addr,
-  input  logic [7:0]            cfg_len,    // 突发长度（len+1 拍）
-  input  logic [2:0]            cfg_size,
-  input  logic [1:0]            cfg_burst,
-  input  logic [ID_WIDTH-1:0]   cfg_id,
-  input  logic [DATA_WIDTH-1:0] cfg_wdata0, // 拍 0 写数据，后续拍递增
-  input  logic [DATA_WIDTH/8-1:0] cfg_wstrb, // 写字节使能（默认全 1）
-  output logic                  busy,
-  output logic                  wr_done,    // 写事务完成脉冲
-  output logic                  rd_done,    // 读事务完成脉冲
-  output logic [1:0]            wr_status,  // 写响应码
-  output logic [1:0]            rd_status,  // 读响应码（末拍）
-  output logic [DATA_WIDTH-1:0] rd_checksum,// 读数据异或累加
+  input  wire                  wr_start,   // 写事务启动脉冲
+  input  wire                  rd_start,   // 读事务启动脉冲
+  input  wire [ADDR_WIDTH-1:0] cfg_addr,
+  input  wire [7:0]            cfg_len,    // 突发长度（len+1 拍）
+  input  wire [2:0]            cfg_size,
+  input  wire [1:0]            cfg_burst,
+  input  wire [ID_WIDTH-1:0]   cfg_id,
+  input  wire [DATA_WIDTH-1:0] cfg_wdata0, // 拍 0 写数据，后续拍递增
+  input  wire [DATA_WIDTH/8-1:0] cfg_wstrb, // 写字节使能（默认全 1）
+  output wire                  busy,
+  output wire                  wr_done,    // 写事务完成脉冲
+  output wire                  rd_done,    // 读事务完成脉冲
+  output reg  [1:0]            wr_status,  // 写响应码
+  output reg  [1:0]            rd_status,  // 读响应码（末拍）
+  output wire [DATA_WIDTH-1:0] rd_checksum,// 读数据异或累加
   // ---- AXI master 端口（AW）----
-  output logic awvalid,
-  output logic [ID_WIDTH-1:0]   awid,
-  output logic [ADDR_WIDTH-1:0] awaddr,
-  output logic [7:0]            awlen,
-  output logic [2:0]            awsize,
-  output logic [1:0]            awburst,
-  input  logic awready,
+  output reg awvalid,
+  output reg [ID_WIDTH-1:0]   awid,
+  output reg [ADDR_WIDTH-1:0] awaddr,
+  output reg [7:0]            awlen,
+  output reg [2:0]            awsize,
+  output reg [1:0]            awburst,
+  input  wire awready,
   // ---- W ----
-  output logic wvalid,
-  output logic [DATA_WIDTH-1:0]   wdata,
-  output logic [DATA_WIDTH/8-1:0] wstrb,
-  output logic wlast,
-  input  logic wready,
+  output reg wvalid,
+  output reg [DATA_WIDTH-1:0]   wdata,
+  output reg [DATA_WIDTH/8-1:0] wstrb,
+  output reg wlast,
+  input  wire wready,
   // ---- B ----
-  input  logic bvalid,
-  input  logic [ID_WIDTH-1:0] bid,
-  input  logic [1:0] bresp,
-  output logic bready,
+  input  wire bvalid,
+  input  wire [ID_WIDTH-1:0] bid,
+  input  wire [1:0] bresp,
+  output reg bready,
   // ---- AR ----
-  output logic arvalid,
-  output logic [ID_WIDTH-1:0]   arid,
-  output logic [ADDR_WIDTH-1:0] araddr,
-  output logic [7:0]            arlen,
-  output logic [2:0]            arsize,
-  output logic [1:0]            arburst,
-  input  logic arready,
+  output reg arvalid,
+  output reg [ID_WIDTH-1:0]   arid,
+  output reg [ADDR_WIDTH-1:0] araddr,
+  output reg [7:0]            arlen,
+  output reg [2:0]            arsize,
+  output reg [1:0]            arburst,
+  input  wire arready,
   // ---- R ----
-  input  logic rvalid,
-  input  logic [ID_WIDTH-1:0] rid,
-  input  logic [DATA_WIDTH-1:0] rdata,
-  input  logic [1:0] rresp,
-  input  logic rlast,
-  output logic rready
+  input  wire rvalid,
+  input  wire [ID_WIDTH-1:0] rid,
+  input  wire [DATA_WIDTH-1:0] rdata,
+  input  wire [1:0] rresp,
+  input  wire rlast,
+  output reg rready
 );
 
   //==========================================================================
@@ -80,8 +80,8 @@ module axi_master_cfg #(
   //==========================================================================
   localparam W_IDLE = 3'd0, W_AW = 3'd1, W_DATA = 3'd2,
              W_RESP = 3'd3, W_DONE = 3'd4;
-  logic [2:0] w_state;
-  logic [7:0] w_beat;
+  reg [2:0] w_state;
+  reg [7:0] w_beat;
 
   always_comb begin
     awvalid = (w_state == W_AW);
@@ -128,8 +128,8 @@ module axi_master_cfg #(
   // 读 FSM：IDLE -> AR -> DATA -> DONE
   //==========================================================================
   localparam R_IDLE = 2'd0, R_AR = 2'd1, R_DATA = 2'd2, R_DONE = 2'd3;
-  logic [1:0] r_state;
-  logic [DATA_WIDTH-1:0] chk_q;
+  reg [1:0] r_state;
+  reg [DATA_WIDTH-1:0] chk_q;
 
   always_comb begin
     arvalid = (r_state == R_AR);

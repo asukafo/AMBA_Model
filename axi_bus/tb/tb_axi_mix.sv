@@ -22,52 +22,56 @@ module tb_axi_mix;
   localparam MAX_WAIT = 100000;
 
   // ---- 时钟 / 复位 ----
-  logic clk;
-  logic rstn;
+  reg clk;
+  reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;
 
   // ---- 互联连线 + DUT（共用）----
   `include "tb_axi_wires.svh"
   // 直通属性默认 0（互斥/窄传输场景由专属 master 驱动对应位）
-  initial begin
-    s_awlock = '0; s_awcache = '0; s_awprot = '0;
-    s_awqos = '0; s_awregion = '0;
-    s_arlock = '0; s_arcache = '0; s_arprot = '0;
-    s_arqos = '0; s_arregion = '0;
-  end
+  assign s_awlock = '0;
+  assign s_awcache = '0;
+  assign s_awprot = '0;
+  assign s_awqos = '0;
+  assign s_awregion = '0;
+  assign s_arlock = '0;
+  assign s_arcache = '0;
+  assign s_arprot = '0;
+  assign s_arqos = '0;
+  assign s_arregion = '0;
 
 
   // ---- master0（cfg）配置（标量连线）----
-  logic cfg0_wr_start, cfg0_rd_start;
-  logic [`AXI_ADDR_W-1:0]   cfg0_addr;
-  logic [7:0]               cfg0_len;
-  logic [2:0]               cfg0_size;
-  logic [1:0]               cfg0_burst;
-  logic [`AXI_ID_W-1:0]     cfg0_id;
-  logic [`AXI_DATA_W-1:0]   cfg0_wdata0;
-  logic [`AXI_DATA_W/8-1:0] cfg0_wstrb;
+  reg cfg0_wr_start, cfg0_rd_start;
+  reg [`AXI_ADDR_W-1:0] cfg0_addr;
+  reg [7:0] cfg0_len;
+  reg [2:0] cfg0_size;
+  reg [1:0] cfg0_burst;
+  reg [`AXI_ID_W-1:0] cfg0_id;
+  reg [`AXI_DATA_W-1:0] cfg0_wdata0;
+  reg [`AXI_DATA_W/8-1:0] cfg0_wstrb;
 
   // ---- master1（pipe）描述符连线 ----
-  logic pipe_start, desc_wr;
-  logic [3:0] pipe_ndesc;
-  logic [$clog2(8)-1:0] desc_sel;
-  logic desc_dir;
-  logic [`AXI_ADDR_W-1:0] desc_addr;
-  logic [7:0]            desc_len;
-  logic [2:0]            desc_size;
-  logic [1:0]            desc_burst;
-  logic [`AXI_ID_W-1:0]  desc_id;
-  logic [`AXI_DATA_W-1:0] desc_wdata0;
+  reg pipe_start, desc_wr;
+  reg [3:0] pipe_ndesc;
+  reg [$clog2(8)-1:0] desc_sel;
+  reg desc_dir;
+  reg [`AXI_ADDR_W-1:0] desc_addr;
+  reg [7:0] desc_len;
+  reg [2:0] desc_size;
+  reg [1:0] desc_burst;
+  reg [`AXI_ID_W-1:0] desc_id;
+  reg [`AXI_DATA_W-1:0] desc_wdata0;
 
   // ---- lat slave 配置 ----
-  logic [7:0] lat_b_delay, lat_r_delay;
-  logic [1:0] lat_err_mode;
-  logic [7:0] lat_err_period;
+  reg [7:0] lat_b_delay, lat_r_delay;
+  reg [1:0] lat_err_mode;
+  reg [7:0] lat_err_period;
 
   // ---- 调试读口 ----
-  logic [`AXI_ADDR_W-1:0] dbg_addr0, dbg_addr1;
-  logic [7:0] dbg_byte0_c, dbg_byte1_c;
+  reg [`AXI_ADDR_W-1:0] dbg_addr0, dbg_addr1;
+  wire [7:0] dbg_byte0_c, dbg_byte1_c;
 
   // ---- master0：cfg ----
   axi_master_cfg #(
@@ -249,13 +253,13 @@ module tb_axi_mix;
   // 参考内存
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
-  logic [7:0] ref_mem [0:SB_DEPTH-1];
+  reg [7:0] ref_mem [0:SB_DEPTH-1];
   initial begin
     for (int i = 0; i < SB_DEPTH; i++)
       ref_mem[i] = 8'h00;
   end
 
-  function automatic integer slave_of(input logic [`AXI_ADDR_W-1:0] a);
+  function automatic integer slave_of(input [`AXI_ADDR_W-1:0] a);
     if ((a & 32'hF000_0000) == 32'h0000_0000) slave_of = 0;
     else if ((a & 32'hF000_0000) == 32'h1000_0000) slave_of = 1;
     else slave_of = -1;
@@ -265,22 +269,22 @@ module tb_axi_mix;
   // 完全一致：strobe lane i → 字对齐基址 + i 的字节）。
   // use_explicit=1 时用显式 strobe（cfg master 自定义 WSTRB 场景）
   task automatic ref_update(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_DATA_W-1:0] base,
-    input logic use_explicit,
-    input logic [`AXI_DATA_W/8-1:0] explicit_strb
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_DATA_W-1:0] base,
+    input use_explicit,
+    input [`AXI_DATA_W/8-1:0] explicit_strb
   );
     integer s;
     begin
       s = slave_of(addr);
       if (s >= 0) begin
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [`AXI_DATA_W-1:0] d;
-          logic [`AXI_DATA_W/8-1:0] st;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_DATA_W-1:0] d;
+          reg [`AXI_DATA_W/8-1:0] st;
           a  = axi_beat_addr(addr, burst, size, len, b);
           d  = base + b;
           st = use_explicit ? explicit_strb : axi_strb_for_size(size, a);
@@ -293,8 +297,8 @@ module tb_axi_mix;
   endtask
 
   // 从 slave 调试口读一个字
-  task automatic dbg_word(input integer s, input logic [`AXI_ADDR_W-1:0] a,
-                          output logic [`AXI_DATA_W-1:0] w);
+  task automatic dbg_word(input integer s, input [`AXI_ADDR_W-1:0] a,
+                          output [`AXI_DATA_W-1:0] w);
     begin
       if (s == 0) begin
         dbg_addr0 = a;     #1; w[7:0]   = dbg_byte0_c;
@@ -315,8 +319,8 @@ module tb_axi_mix;
     begin
       for (int s = 0; s < `AXI_M_SLAVE; s++) begin
         for (int i = 0; i < 4096; i++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [7:0] b;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [7:0] b;
           a = (s == 0) ? 32'h0000_0000 + i : 32'h1000_0000 + i;
           if (s == 0) begin dbg_addr0 = a; #1; b = dbg_byte0_c; end
           else        begin dbg_addr1 = a; #1; b = dbg_byte1_c; end
@@ -332,19 +336,19 @@ module tb_axi_mix;
 
   // 期望校验和（读返回字 = 字对齐基址 + lane，与 slave 的 lane 映射一致）
   task automatic exp_checksum(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst, input logic [2:0] size, input logic [7:0] len,
-    output logic [`AXI_DATA_W-1:0] chk
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst, input [2:0] size, input [7:0] len,
+    output [`AXI_DATA_W-1:0] chk
   );
     integer s;
-    logic [`AXI_DATA_W-1:0] acc;
+    reg [`AXI_DATA_W-1:0] acc;
     begin
       s = slave_of(addr);
       acc = '0;
       if (s >= 0) begin
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [`AXI_ADDR_W-1:0] wb;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_ADDR_W-1:0] wb;
           a  = axi_beat_addr(addr, burst, size, len, b);
           wb = a & ~(`AXI_ADDR_W'(3));
           acc = acc ^ {ref_mem[s*4096 + wb[11:0] + 3],
@@ -367,11 +371,11 @@ module tb_axi_mix;
   //--------------------------------------------------------------------------
   // 驱动：cfg master 写/读（master0）
   //--------------------------------------------------------------------------
-  task automatic mst0_wr(input logic [`AXI_ADDR_W-1:0] addr,
-                         input logic [7:0] len, input logic [2:0] size,
-                         input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                         input logic [`AXI_DATA_W-1:0] base,
-                         output logic [1:0] status);
+  task automatic mst0_wr(input [`AXI_ADDR_W-1:0] addr,
+                         input [7:0] len, input [2:0] size,
+                         input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                         input [`AXI_DATA_W-1:0] base,
+                         output [1:0] status);
     integer cnt;
     begin
       cfg0_addr   = addr;
@@ -395,11 +399,11 @@ module tb_axi_mix;
     end
   endtask
 
-  task automatic mst0_rd(input logic [`AXI_ADDR_W-1:0] addr,
-                         input logic [7:0] len, input logic [2:0] size,
-                         input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                         output logic [1:0] status,
-                         output logic [`AXI_DATA_W-1:0] checksum);
+  task automatic mst0_rd(input [`AXI_ADDR_W-1:0] addr,
+                         input [7:0] len, input [2:0] size,
+                         input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                         output [1:0] status,
+                         output [`AXI_DATA_W-1:0] checksum);
     integer cnt;
     begin
       cfg0_addr  = addr;
@@ -425,11 +429,11 @@ module tb_axi_mix;
   //--------------------------------------------------------------------------
   // 驱动：pipe master（master1）
   //--------------------------------------------------------------------------
-  task automatic desc_put(input integer sel, input logic dir,
-                          input logic [`AXI_ADDR_W-1:0] addr,
-                          input logic [7:0] len, input logic [2:0] size,
-                          input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                          input logic [`AXI_DATA_W-1:0] base);
+  task automatic desc_put(input integer sel, input dir,
+                          input [`AXI_ADDR_W-1:0] addr,
+                          input [7:0] len, input [2:0] size,
+                          input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                          input [`AXI_DATA_W-1:0] base);
     begin
       desc_sel    = sel;   // 隐式截断（int 部分选择有 iverilog elab bug）
       desc_dir    = dir;
@@ -491,8 +495,8 @@ module tb_axi_mix;
       chk(!mst1.resp_err, "M1 resp_err");
       // 读校验和 = 4 个读描述符的 XOR
       begin
-        logic [`AXI_DATA_W-1:0] echk, acc;
-        logic [`AXI_DATA_W-1:0] e0, e1, e2, e3;
+        reg [`AXI_DATA_W-1:0] echk, acc;
+        reg [`AXI_DATA_W-1:0] e0, e1, e2, e3;
         exp_checksum(32'h0000_0200, `AXI_BURST_INCR, 3'd2, 8'd3, e0);
         exp_checksum(32'h1000_0400, `AXI_BURST_INCR, 3'd2, 8'd1, e1);
         exp_checksum(32'h0000_0600, `AXI_BURST_INCR, 3'd2, 8'd7, e2);
@@ -508,8 +512,8 @@ module tb_axi_mix;
 
   // M2：cfg → lat slave：正常写读回 + 全 SLVERR 检查
   task automatic m2();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk, echk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk, echk;
     begin
       lat_b_delay = 8'd2;
       lat_r_delay = 8'd2;
@@ -537,7 +541,7 @@ module tb_axi_mix;
 
   // M3：并发：cfg→ram 写 同时 pipe→lat 读
   task automatic m3();
-    logic [1:0] st0;
+    reg [1:0] st0;
     begin
       // 先给 lat 放数据（M2 已写过 0x1000_0A00，直接读回）
       fork
@@ -554,7 +558,7 @@ module tb_axi_mix;
       join
       ref_update(32'h0000_0E00, `AXI_BURST_INCR, 3'd2, 8'd3, 32'h1100_0000, 0, 0);
       begin
-        logic [`AXI_DATA_W-1:0] echk;
+        reg [`AXI_DATA_W-1:0] echk;
         exp_checksum(32'h1000_0A00, `AXI_BURST_INCR, 3'd2, 8'd3, echk);
         chk(mst1.rd_checksum === echk, "M3 pipe checksum");
       end
@@ -565,7 +569,7 @@ module tb_axi_mix;
 
   // M4：两 master 抢 lat slave（大延迟制造 B 竞争）
   task automatic m4();
-    logic [1:0] st0;
+    reg [1:0] st0;
     begin
       lat_b_delay = 8'd5;
       lat_r_delay = 8'd3;
@@ -600,7 +604,7 @@ module tb_axi_mix;
         // 4 条写（唯一地址、16B 步进不重叠）+ 4 条读（读回前 4 条）
         for (int i = 0; i < 4; i++) begin
           integer ur, base_i, len_i;
-          logic [`AXI_ADDR_W-1:0] addr;
+          reg [`AXI_ADDR_W-1:0] addr;
           ur = tseed + round*100 + i;
           base_i = 32'h1500_0000 + round*256 + i*16;
           len_i = (tseed + i) % 4;   // 0..3 拍指数（突发 <= 16B，不重叠）
@@ -615,10 +619,10 @@ module tb_axi_mix;
         pipe_run();
         chk(!mst1.resp_err, "M5 pipe resp_err");
         begin
-          logic [`AXI_DATA_W-1:0] acc, echk;
+          reg [`AXI_DATA_W-1:0] acc, echk;
           acc = '0;
           for (int i = 0; i < 4; i++) begin
-            logic [`AXI_ADDR_W-1:0] addr;
+            reg [`AXI_ADDR_W-1:0] addr;
             integer base_i, len_i;
             base_i = 32'h1500_0000 + round*256 + i*16;
             len_i = (tseed + i) % 4;
@@ -657,7 +661,7 @@ module tb_axi_mix;
       pipe_run();
       chk(!mst1.resp_err, "M6 resp_err");
       begin
-        logic [`AXI_DATA_W-1:0] acc, echk;
+        reg [`AXI_DATA_W-1:0] acc, echk;
         acc = '0;
         exp_checksum(32'h0000_0B00, `AXI_BURST_INCR, 3'd0, 8'd3, echk);
         acc = acc ^ echk;
@@ -678,8 +682,8 @@ module tb_axi_mix;
   // M7：cfg 窄传输（显式 WSTRB 单拍部分写 + 读回）
   //==========================================================================
   task automatic m7();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk, echk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk, echk;
     begin
       // 半字写：地址 0x1000_0B40 起 size=1 单拍，WSTRB=1100（高 2 字节）
       cfg0_wstrb = 4'b1100;
@@ -691,7 +695,7 @@ module tb_axi_mix;
       mst0_rd(32'h1000_0B40, 8'd0, 3'd2, `AXI_BURST_INCR, 4'd0, st, chk);
       chk(st == 0, "M7 rd status");
       begin
-        logic [`AXI_DATA_W-1:0] w;
+        reg [`AXI_DATA_W-1:0] w;
         dbg_word(1, 32'h1000_0B40, w);
         chk(w === 32'h1A00_0000, "M7 narrow write value");
         chk(chk === w, "M7 checksum");

@@ -26,35 +26,39 @@ module tb_axi_rtl;
   localparam MAX_WAIT = 100000;
 
   // ---- 时钟 / 复位 ----
-  logic clk;
-  logic rstn;
+  reg clk;
+  reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;   // 100MHz
 
   // ---- 互联连线 + DUT（共用）----
   `include "tb_axi_wires.svh"
   // 直通属性默认 0（互斥/窄传输场景由专属 master 驱动对应位）
-  initial begin
-    s_awlock = '0; s_awcache = '0; s_awprot = '0;
-    s_awqos = '0; s_awregion = '0;
-    s_arlock = '0; s_arcache = '0; s_arprot = '0;
-    s_arqos = '0; s_arregion = '0;
-  end
+  assign s_awlock = '0;
+  assign s_awcache = '0;
+  assign s_awprot = '0;
+  assign s_awqos = '0;
+  assign s_awregion = '0;
+  assign s_arlock = '0;
+  assign s_arcache = '0;
+  assign s_arprot = '0;
+  assign s_arqos = '0;
+  assign s_arregion = '0;
 
 
   // ---- master 配置（每 master 一拍平段，[i*W +: W] 访问）----
-  logic [2*`AXI_ADDR_W-1:0]      cfg_addr;
-  logic [2*8-1:0]                cfg_len;
-  logic [2*3-1:0]                cfg_size;
-  logic [2*2-1:0]                cfg_burst;
-  logic [2*`AXI_ID_W-1:0]        cfg_id;
-  logic [2*`AXI_DATA_W-1:0]      cfg_wdata0;
-  logic [2*`AXI_DATA_W/8-1:0]    cfg_wstrb;
-  logic [2-1:0]                  cfg_wr_start;
-  logic [2-1:0]                  cfg_rd_start;
+  reg [2*`AXI_ADDR_W-1:0] cfg_addr;
+  reg [2*8-1:0] cfg_len;
+  reg [2*3-1:0] cfg_size;
+  reg [2*2-1:0] cfg_burst;
+  reg [2*`AXI_ID_W-1:0] cfg_id;
+  reg [2*`AXI_DATA_W-1:0] cfg_wdata0;
+  reg [2*`AXI_DATA_W/8-1:0] cfg_wstrb;
+  reg [2-1:0] cfg_wr_start;
+  reg [2-1:0] cfg_rd_start;
 
   // ---- RAM 调试读口 ----
-  logic [2*`AXI_ADDR_W-1:0]      ram_dbg_addr;
+  reg [2*`AXI_ADDR_W-1:0]      ram_dbg_addr;
 
   // ---- RTL master 实例 ----
   for (genvar i = 0; i < `AXI_N_MASTER; i++) begin : g_mst
@@ -146,19 +150,19 @@ module tb_axi_rtl;
   end
 
   // RAM 调试读口输出（组合）：TB 内部数组接收实例输出
-  logic [7:0] ram_dbg_byte_c [`AXI_M_SLAVE];
+  wire [7:0] ram_dbg_byte_c [`AXI_M_SLAVE];
 
   //--------------------------------------------------------------------------
   // 参考内存（与 axi_slave_ram 同步更新，用于逐字节比对）
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
-  logic [7:0] ref_mem [0:SB_DEPTH-1];
+  reg [7:0] ref_mem [0:SB_DEPTH-1];
   initial begin
     for (int i = 0; i < SB_DEPTH; i++)
       ref_mem[i] = 8'h00;
   end
 
-  function automatic integer slave_of(input logic [`AXI_ADDR_W-1:0] a);
+  function automatic integer slave_of(input [`AXI_ADDR_W-1:0] a);
     if ((a & 32'hF000_0000) == 32'h0000_0000) slave_of = 0;
     else if ((a & 32'hF000_0000) == 32'h1000_0000) slave_of = 1;
     else slave_of = -1;
@@ -166,19 +170,19 @@ module tb_axi_rtl;
 
   // 参考内存更新（master 写第 b 拍数据 = base + b，WSTRB 全 1）
   task automatic ref_update(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
-    input logic [`AXI_DATA_W-1:0] base
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
+    input [`AXI_DATA_W-1:0] base
   );
     integer s;
     begin
       s = slave_of(addr);
       if (s >= 0) begin
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [`AXI_DATA_W-1:0] d;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_DATA_W-1:0] d;
           a = axi_beat_addr(addr, burst, size, len, b);
           d = base + b;
           for (int i = 0; i < `AXI_DATA_W/8; i++)
@@ -189,8 +193,8 @@ module tb_axi_rtl;
   endtask
 
   // 从 RAM 调试口读一个字（little-endian）
-  task automatic ram_word(input integer s, input logic [`AXI_ADDR_W-1:0] a,
-                          output logic [`AXI_DATA_W-1:0] w);
+  task automatic ram_word(input integer s, input [`AXI_ADDR_W-1:0] a,
+                          output [`AXI_DATA_W-1:0] w);
     begin
       if (s == 0) begin
         ram_dbg_addr[0*`AXI_ADDR_W +: `AXI_ADDR_W] = a;
@@ -227,8 +231,8 @@ module tb_axi_rtl;
     begin
       for (int s = 0; s < `AXI_M_SLAVE; s++) begin
         for (int i = 0; i < 4096; i++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [7:0] b;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [7:0] b;
           a = (s == 0) ? 32'h0000_0000 + i : 32'h1000_0000 + i;
           if (s == 0) begin
             ram_dbg_addr[0*`AXI_ADDR_W +: `AXI_ADDR_W] = a;
@@ -259,11 +263,11 @@ module tb_axi_rtl;
   //--------------------------------------------------------------------------
   // 驱动任务：配置 master 并发起写/读事务，等待完成
   //--------------------------------------------------------------------------
-  task automatic mst_wr(input integer m, input logic [`AXI_ADDR_W-1:0] addr,
-                        input logic [7:0] len, input logic [2:0] size,
-                        input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                        input logic [`AXI_DATA_W-1:0] base,
-                        output logic [1:0] status);
+  task automatic mst_wr(input integer m, input [`AXI_ADDR_W-1:0] addr,
+                        input [7:0] len, input [2:0] size,
+                        input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                        input [`AXI_DATA_W-1:0] base,
+                        output [1:0] status);
     integer cnt;
     begin
       // 配置写 TB 侧连线（实例输入端口不能层级驱动）
@@ -297,11 +301,11 @@ module tb_axi_rtl;
     end
   endtask
 
-  task automatic mst_rd(input integer m, input logic [`AXI_ADDR_W-1:0] addr,
-                        input logic [7:0] len, input logic [2:0] size,
-                        input logic [1:0] burst, input logic [`AXI_ID_W-1:0] id,
-                        output logic [1:0] status,
-                        output logic [`AXI_DATA_W-1:0] checksum);
+  task automatic mst_rd(input integer m, input [`AXI_ADDR_W-1:0] addr,
+                        input [7:0] len, input [2:0] size,
+                        input [1:0] burst, input [`AXI_ID_W-1:0] id,
+                        output [1:0] status,
+                        output [`AXI_DATA_W-1:0] checksum);
     integer cnt;
     begin
       cfg_addr[m*`AXI_ADDR_W +: `AXI_ADDR_W] = addr;
@@ -336,18 +340,18 @@ module tb_axi_rtl;
 
   // 期望校验和：按参考内存复算读突发的 XOR
   task automatic exp_checksum(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst, input logic [2:0] size, input logic [7:0] len,
-    output logic [`AXI_DATA_W-1:0] chk
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst, input [2:0] size, input [7:0] len,
+    output [`AXI_DATA_W-1:0] chk
   );
     integer s;
-    logic [`AXI_DATA_W-1:0] acc;
+    reg [`AXI_DATA_W-1:0] acc;
     begin
       s = slave_of(addr);
       acc = '0;
       if (s >= 0) begin
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_ADDR_W-1:0] a;
           a = axi_beat_addr(addr, burst, size, len, b);
           acc = acc ^ {ref_mem[s*4096 + a[11:0] + 3],
                        ref_mem[s*4096 + a[11:0] + 2],
@@ -365,8 +369,8 @@ module tb_axi_rtl;
 
   // R1：单主写读回（INCR 多拍）
   task automatic r1();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk, echk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk, echk;
     begin
       mst_wr(0, 32'h0000_0100, 8'd7, 3'd2, `AXI_BURST_INCR, 4'd0, 32'h1000_0000, st);
       chk(st == 0, "R1 m0 wr status");
@@ -389,7 +393,7 @@ module tb_axi_rtl;
 
   // R2：双主并发写读不同 slave
   task automatic r2();
-    logic [1:0] st0, st1;
+    reg [1:0] st0, st1;
     begin
       fork
         begin
@@ -410,7 +414,7 @@ module tb_axi_rtl;
 
   // R3：双主抢同一 slave（仲裁压力）
   task automatic r3();
-    logic [1:0] st0, st1;
+    reg [1:0] st0, st1;
     begin
       fork
         begin
@@ -435,8 +439,8 @@ module tb_axi_rtl;
 
   // R4：DECERR 读写
   task automatic r4();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk;
     begin
       mst_wr(0, 32'h8000_0000, 8'd1, 3'd2, `AXI_BURST_INCR, 4'd0, 32'h7000_0000, st);
       chk(st == 3, "R4 wr DECERR status");
@@ -448,8 +452,8 @@ module tb_axi_rtl;
 
   // R5：WRAP 突发写读回（起点 0x224，4 拍 × 4B，回卷边界 0x220）
   task automatic r5();
-    logic [1:0] st;
-    logic [`AXI_DATA_W-1:0] chk, echk;
+    reg [1:0] st;
+    reg [`AXI_DATA_W-1:0] chk, echk;
     begin
       mst_wr(0, 32'h0000_0224, 8'd3, 3'd2, `AXI_BURST_WRAP, 4'd0, 32'h8000_0000, st);
       chk(st == 0, "R5 wr status");
@@ -465,8 +469,8 @@ module tb_axi_rtl;
 
   // R6：交叉流量：m0 写 slave0 同时 m1 读 slave1
   task automatic r6();
-    logic [1:0] st0, st1;
-    logic [`AXI_DATA_W-1:0] chk1, echk1;
+    reg [1:0] st0, st1;
+    reg [`AXI_DATA_W-1:0] chk1, echk1;
     begin
       // 先给 slave1 放数据（R1 已写过 0x1000_0200，直接读回）
       fork

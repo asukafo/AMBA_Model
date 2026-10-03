@@ -18,69 +18,69 @@ module axi_master_excl #(
   parameter int DATA_WIDTH = `AXI_DATA_W,
   parameter int ID_WIDTH   = `AXI_ID_W
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 配置 / 状态（软件侧）----
-  input  logic start,
-  input  logic [ADDR_WIDTH-1:0] cfg_addr,
-  input  logic [7:0]            cfg_len,
-  input  logic [2:0]            cfg_size,
-  input  logic [1:0]            cfg_burst,
-  input  logic [ID_WIDTH-1:0]   cfg_id,
-  input  logic [DATA_WIDTH-1:0] cfg_wdata0,
-  input  logic [7:0]            cfg_wr_delay, // 互斥读到条件写之间的拍数（0=立即）
-  output logic busy,
-  output logic done,            // DONE 状态一拍（组合输出）
-  output logic [1:0] rd_resp,   // 互斥读响应
-  output logic [1:0] wr_resp,   // 条件写响应（未发写时为 0）
-  output logic wr_issued,       // 读 EXOKAY 后确实发了互斥写
-  output logic [DATA_WIDTH-1:0] rd_checksum,
+  input  wire start,
+  input  wire [ADDR_WIDTH-1:0] cfg_addr,
+  input  wire [7:0]            cfg_len,
+  input  wire [2:0]            cfg_size,
+  input  wire [1:0]            cfg_burst,
+  input  wire [ID_WIDTH-1:0]   cfg_id,
+  input  wire [DATA_WIDTH-1:0] cfg_wdata0,
+  input  wire [7:0]            cfg_wr_delay, // 互斥读到条件写之间的拍数（0=立即）
+  output wire busy,
+  output wire done,            // DONE 状态一拍（组合输出）
+  output reg [1:0] rd_resp,   // 互斥读响应
+  output reg [1:0] wr_resp,   // 条件写响应（未发写时为 0）
+  output reg wr_issued,       // 读 EXOKAY 后确实发了互斥写
+  output wire [DATA_WIDTH-1:0] rd_checksum,
   // ---- AXI master 端口（AW）----
-  output logic awvalid,
-  output logic [ID_WIDTH-1:0]   awid,
-  output logic [ADDR_WIDTH-1:0] awaddr,
-  output logic [7:0]            awlen,
-  output logic [2:0]            awsize,
-  output logic [1:0]            awburst,
-  output logic                  awlock,
-  input  logic awready,
+  output reg awvalid,
+  output reg [ID_WIDTH-1:0]   awid,
+  output reg [ADDR_WIDTH-1:0] awaddr,
+  output reg [7:0]            awlen,
+  output reg [2:0]            awsize,
+  output reg [1:0]            awburst,
+  output reg                  awlock,
+  input  wire awready,
   // ---- W ----
-  output logic wvalid,
-  output logic [DATA_WIDTH-1:0]   wdata,
-  output logic [DATA_WIDTH/8-1:0] wstrb,
-  output logic wlast,
-  input  logic wready,
+  output reg wvalid,
+  output reg [DATA_WIDTH-1:0]   wdata,
+  output reg [DATA_WIDTH/8-1:0] wstrb,
+  output reg wlast,
+  input  wire wready,
   // ---- B ----
-  input  logic bvalid,
-  input  logic [ID_WIDTH-1:0] bid,
-  input  logic [1:0] bresp,
-  output logic bready,
+  input  wire bvalid,
+  input  wire [ID_WIDTH-1:0] bid,
+  input  wire [1:0] bresp,
+  output reg bready,
   // ---- AR ----
-  output logic arvalid,
-  output logic [ID_WIDTH-1:0]   arid,
-  output logic [ADDR_WIDTH-1:0] araddr,
-  output logic [7:0]            arlen,
-  output logic [2:0]            arsize,
-  output logic [1:0]            arburst,
-  output logic                  arlock,
-  input  logic arready,
+  output reg arvalid,
+  output reg [ID_WIDTH-1:0]   arid,
+  output reg [ADDR_WIDTH-1:0] araddr,
+  output reg [7:0]            arlen,
+  output reg [2:0]            arsize,
+  output reg [1:0]            arburst,
+  output reg                  arlock,
+  input  wire arready,
   // ---- R ----
-  input  logic rvalid,
-  input  logic [ID_WIDTH-1:0] rid,
-  input  logic [DATA_WIDTH-1:0] rdata,
-  input  logic [1:0] rresp,
-  input  logic rlast,
-  output logic rready
+  input  wire rvalid,
+  input  wire [ID_WIDTH-1:0] rid,
+  input  wire [DATA_WIDTH-1:0] rdata,
+  input  wire [1:0] rresp,
+  input  wire rlast,
+  output reg rready
 );
 
   localparam E_IDLE = 3'd0, E_AR = 3'd1, E_RD = 3'd2, E_DLY = 3'd3,
              E_AW = 3'd4, E_WD = 3'd5, E_B = 3'd6, E_DONE = 3'd7;
-  logic [2:0] e_state;
-  logic [7:0] w_beat;
-  logic [7:0] dly_cnt;
-  logic [DATA_WIDTH-1:0] chk_q;
-  logic [1:0] rd_resp_q, wr_resp_q;
-  logic wr_issued_q;
+  reg [2:0] e_state;
+  reg [7:0] w_beat;
+  reg [7:0] dly_cnt;
+  reg [DATA_WIDTH-1:0] chk_q;
+  reg [1:0] rd_resp_q, wr_resp_q;
+  reg wr_issued_q;
 
   always_comb begin
     awvalid = (e_state == E_AW);

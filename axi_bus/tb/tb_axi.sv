@@ -34,17 +34,17 @@ module tb_axi;
   timeunit 1ns / 1ps;
 
   // ---- 时钟 / 复位 ----
-  logic clk;
-  logic rstn;
+  reg clk;
+  reg rstn;
   initial clk = 1'b0;
   always #5 clk = ~clk;   // 100MHz
 
   `include "tb_axi_wires.svh"
 
   // slave 配置（背压概率 / 读延迟）
-  logic [6:0] cfg_aw_rdy_pct [`AXI_M_SLAVE];
-  logic [6:0] cfg_w_rdy_pct  [`AXI_M_SLAVE];
-  logic [7:0] cfg_r_delay    [`AXI_M_SLAVE];
+  reg [6:0] cfg_aw_rdy_pct [`AXI_M_SLAVE];
+  reg [6:0] cfg_w_rdy_pct  [`AXI_M_SLAVE];
+  reg [7:0] cfg_r_delay    [`AXI_M_SLAVE];
 
 
   // ---- master BFM ----
@@ -131,24 +131,27 @@ module tb_axi;
   // scoreboard：参考内存（每 slave 一个 4KB 窗口，拍平成 1D）
   //--------------------------------------------------------------------------
   localparam SB_DEPTH = `AXI_M_SLAVE * 4096;
-  logic [7:0] ref_mem [0:SB_DEPTH-1];
+  reg [7:0] ref_mem [0:SB_DEPTH-1];
   initial begin
     for (int i = 0; i < SB_DEPTH; i++)
       ref_mem[i] = 8'h00;
   end
 
-  function automatic integer slave_of(input logic [`AXI_ADDR_W-1:0] a);
-    if ((a & 32'hF000_0000) == 32'h0000_0000) slave_of = 0;
-    else if ((a & 32'hF000_0000) == 32'h1000_0000) slave_of = 1;
-    else slave_of = -1;
+  function automatic integer slave_of;
+    input [`AXI_ADDR_W-1:0] a;
+    begin
+      if ((a & 32'hF000_0000) == 32'h0000_0000) slave_of = 0;
+      else if ((a & 32'hF000_0000) == 32'h1000_0000) slave_of = 1;
+      else slave_of = -1;
+    end
   endfunction
 
   // 参考内存更新（与 BFM 同一套 seed 生成，掩码与写入一致）
   task automatic sb_write(
-    input logic [`AXI_ADDR_W-1:0] addr,
-    input logic [1:0] burst,
-    input logic [2:0] size,
-    input logic [7:0] len,
+    input [`AXI_ADDR_W-1:0] addr,
+    input [1:0] burst,
+    input [2:0] size,
+    input [7:0] len,
     input integer seed,
     input integer strb_seed,
     input integer strb_mode
@@ -158,9 +161,9 @@ module tb_axi;
       s = slave_of(addr);
       if (s >= 0) begin   // DECERR 区无内存
         for (int b = 0; b <= len; b++) begin
-          logic [`AXI_ADDR_W-1:0] a;
-          logic [`AXI_DATA_W-1:0] d;
-          logic [`AXI_DATA_W/8-1:0] st;
+          reg [`AXI_ADDR_W-1:0] a;
+          reg [`AXI_DATA_W-1:0] d;
+          reg [`AXI_DATA_W/8-1:0] st;
           a  = axi_beat_addr(addr, burst, size, len, b);
           d  = axi_test_data(seed, b);
           st = axi_test_strb(strb_seed, b, strb_mode);
@@ -206,7 +209,7 @@ module tb_axi;
   integer aw_hs_cnt [`AXI_N_MASTER];
   integer arb_cnt [`AXI_N_MASTER];
   integer arb_viol;
-  logic   grant1_prev;
+  reg     grant1_prev;
 
   initial begin
     arb_viol = 0;

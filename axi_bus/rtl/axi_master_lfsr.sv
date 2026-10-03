@@ -24,85 +24,85 @@ module axi_master_lfsr #(
   parameter int DATA_WIDTH = `AXI_DATA_W,
   parameter int ID_WIDTH   = `AXI_ID_W
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 控制（软件侧）----
-  input  logic enable,            // 高电平运行，完成 cfg_tx_max 笔后 done
-  input  logic [15:0] cfg_tx_max,
-  input  logic [ADDR_WIDTH-1:0] cfg_base,
-  input  logic [ADDR_WIDTH-1:0] cfg_mask,   // 地址扰动窗口
-  input  logic [31:0] cfg_seed,             // LFSR 初值
+  input  wire enable,            // 高电平运行，完成 cfg_tx_max 笔后 done
+  input  wire [15:0] cfg_tx_max,
+  input  wire [ADDR_WIDTH-1:0] cfg_base,
+  input  wire [ADDR_WIDTH-1:0] cfg_mask,   // 地址扰动窗口
+  input  wire [31:0] cfg_seed,             // LFSR 初值
   // ---- 状态（软件侧）----
-  output logic busy,
-  output logic done,              // 完成脉冲（DONE 状态一拍）
-  output logic [15:0] tx_cnt,     // 已完成事务数
-  output logic resp_err,
-  output logic [1:0] last_err_resp,
-  output logic [15:0] gen_cnt,     // G_GEN 进入次数（调试/统计）
-  output logic [DATA_WIDTH-1:0] rd_checksum,
+  output wire busy,
+  output wire done,              // 完成脉冲（DONE 状态一拍）
+  output reg [15:0] tx_cnt,     // 已完成事务数
+  output wire resp_err,
+  output wire [1:0] last_err_resp,
+  output wire [15:0] gen_cnt,     // G_GEN 进入次数（调试/统计）
+  output wire [DATA_WIDTH-1:0] rd_checksum,
   // ---- 事务日志（本笔参数，tx_vld 拍有效）----
-  output logic tx_vld,
-  output logic tx_dir,
-  output logic [ADDR_WIDTH-1:0] tx_addr,
-  output logic [7:0]            tx_len,
-  output logic [2:0]            tx_size,
-  output logic [1:0]            tx_burst,
-  output logic [ID_WIDTH-1:0]   tx_id,
-  output logic [DATA_WIDTH-1:0] tx_wdata0,
+  output wire tx_vld,
+  output wire tx_dir,
+  output wire [ADDR_WIDTH-1:0] tx_addr,
+  output wire [7:0]            tx_len,
+  output wire [2:0]            tx_size,
+  output wire [1:0]            tx_burst,
+  output wire [ID_WIDTH-1:0]   tx_id,
+  output wire [DATA_WIDTH-1:0] tx_wdata0,
   // ---- AXI master 端口（AW）----
-  output logic awvalid,
-  output logic [ID_WIDTH-1:0]   awid,
-  output logic [ADDR_WIDTH-1:0] awaddr,
-  output logic [7:0]            awlen,
-  output logic [2:0]            awsize,
-  output logic [1:0]            awburst,
-  input  logic awready,
+  output reg awvalid,
+  output reg [ID_WIDTH-1:0]   awid,
+  output reg [ADDR_WIDTH-1:0] awaddr,
+  output reg [7:0]            awlen,
+  output reg [2:0]            awsize,
+  output reg [1:0]            awburst,
+  input  wire awready,
   // ---- W ----
-  output logic wvalid,
-  output logic [DATA_WIDTH-1:0]   wdata,
-  output logic [DATA_WIDTH/8-1:0] wstrb,
-  output logic wlast,
-  input  logic wready,
+  output reg wvalid,
+  output reg [DATA_WIDTH-1:0]   wdata,
+  output reg [DATA_WIDTH/8-1:0] wstrb,
+  output reg wlast,
+  input  wire wready,
   // ---- B ----
-  input  logic bvalid,
-  input  logic [ID_WIDTH-1:0] bid,
-  input  logic [1:0] bresp,
-  output logic bready,
+  input  wire bvalid,
+  input  wire [ID_WIDTH-1:0] bid,
+  input  wire [1:0] bresp,
+  output reg bready,
   // ---- AR ----
-  output logic arvalid,
-  output logic [ID_WIDTH-1:0]   arid,
-  output logic [ADDR_WIDTH-1:0] araddr,
-  output logic [7:0]            arlen,
-  output logic [2:0]            arsize,
-  output logic [1:0]            arburst,
-  input  logic arready,
+  output reg arvalid,
+  output reg [ID_WIDTH-1:0]   arid,
+  output reg [ADDR_WIDTH-1:0] araddr,
+  output reg [7:0]            arlen,
+  output reg [2:0]            arsize,
+  output reg [1:0]            arburst,
+  input  wire arready,
   // ---- R ----
-  input  logic rvalid,
-  input  logic [ID_WIDTH-1:0] rid,
-  input  logic [DATA_WIDTH-1:0] rdata,
-  input  logic [1:0] rresp,
-  input  logic rlast,
-  output logic rready
+  input  wire rvalid,
+  input  wire [ID_WIDTH-1:0] rid,
+  input  wire [DATA_WIDTH-1:0] rdata,
+  input  wire [1:0] rresp,
+  input  wire rlast,
+  output reg rready
 );
 
   localparam G_IDLE = 3'd0, G_GEN = 3'd1, G_AW = 3'd2, G_WD = 3'd3,
              G_B = 3'd4, G_AR = 3'd5, G_RD = 3'd6, G_DONE = 3'd7;
-  logic [2:0] g_state;
-  logic [7:0] w_beat;
-  logic [31:0] lfsr;
-  logic [15:0] tx_cnt_q;
-  logic [DATA_WIDTH-1:0] chk_q;
-  logic resp_err_q;
-  logic [1:0] last_err_resp_q;
-  logic run_done_q;   // 本批完成锁存（撤 enable 解锁，防自动重跑）
-  logic [15:0] gen_cnt_q;
+  reg [2:0] g_state;
+  reg [7:0] w_beat;
+  reg [31:0] lfsr;
+  reg [15:0] tx_cnt_q;
+  reg [DATA_WIDTH-1:0] chk_q;
+  reg resp_err_q;
+  reg [1:0] last_err_resp_q;
+  reg run_done_q;   // 本批完成锁存（撤 enable 解锁，防自动重跑）
+  reg [15:0] gen_cnt_q;
 
   // 本笔事务参数（GEN 拍捕获，执行期间保持）
-  logic tx_dir_q;
-  logic [ADDR_WIDTH-1:0] tx_addr_q;
-  logic [7:0]            tx_len_q;
-  logic [ID_WIDTH-1:0]   tx_id_q;
-  logic [DATA_WIDTH-1:0] tx_wdata0_q;
+  reg tx_dir_q;
+  reg [ADDR_WIDTH-1:0] tx_addr_q;
+  reg [7:0]            tx_len_q;
+  reg [ID_WIDTH-1:0]   tx_id_q;
+  reg [DATA_WIDTH-1:0] tx_wdata0_q;
 
   always_comb begin
     awvalid = (g_state == G_AW);
@@ -127,7 +127,7 @@ module axi_master_lfsr #(
 
   // 事务日志输出 = 当前参数（tx_vld 为 GEN 拍的寄存一拍脉冲，
   // 与捕获后的 tx_* 寄存器对齐——捕获值与 GEN 拍取同一 lfsr 值）
-  logic tx_vld_q;
+  reg tx_vld_q;
   assign tx_vld    = tx_vld_q;
   assign tx_dir    = tx_dir_q;
   assign tx_addr   = tx_addr_q;
@@ -155,7 +155,7 @@ module axi_master_lfsr #(
       if (!enable) run_done_q <= 1'b0;
       // LFSR 每拍推进
       begin
-        logic [31:0] x;
+        reg [31:0] x;
         x = lfsr;
         x ^= x << 13;
         x ^= x >> 17;

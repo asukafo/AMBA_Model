@@ -17,49 +17,49 @@ module axi_master_lite #(
   parameter int ADDR_WIDTH = `AXI_ADDR_W,
   parameter int DATA_WIDTH = `AXI_DATA_W
 ) (
-  input  logic clk,
-  input  logic rstn,
+  input  wire clk,
+  input  wire rstn,
   // ---- 配置 / 状态（软件侧）----
-  input  logic start_wr,
-  input  logic start_rd,
-  input  logic [ADDR_WIDTH-1:0] cfg_addr,
-  input  logic [DATA_WIDTH-1:0] cfg_wdata,
-  input  logic [DATA_WIDTH/8-1:0] cfg_wstrb,
-  input  logic [2:0] cfg_prot,
-  output logic busy,
-  output logic wr_done,           // DONE 状态一拍（组合输出）
-  output logic rd_done,
-  output logic [1:0] wr_status,
-  output logic [1:0] rd_status,
-  output logic [DATA_WIDTH-1:0] rd_data,
+  input  wire start_wr,
+  input  wire start_rd,
+  input  wire [ADDR_WIDTH-1:0] cfg_addr,
+  input  wire [DATA_WIDTH-1:0] cfg_wdata,
+  input  wire [DATA_WIDTH/8-1:0] cfg_wstrb,
+  input  wire [2:0] cfg_prot,
+  output wire busy,
+  output wire wr_done,           // DONE 状态一拍（组合输出）
+  output wire rd_done,
+  output reg [1:0] wr_status,
+  output reg [1:0] rd_status,
+  output reg [DATA_WIDTH-1:0] rd_data,
   // ---- AXI 端口（Lite 子集，无 len/size/burst/id）----
-  output logic awvalid,
-  output logic [ADDR_WIDTH-1:0] awaddr,
-  output logic [2:0]            awprot,
-  input  logic awready,
-  output logic wvalid,
-  output logic [DATA_WIDTH-1:0]   wdata,
-  output logic [DATA_WIDTH/8-1:0] wstrb,
-  input  logic wready,
-  input  logic bvalid,
-  input  logic [1:0] bresp,
-  output logic bready,
-  output logic arvalid,
-  output logic [ADDR_WIDTH-1:0] araddr,
-  output logic [2:0]            arprot,
-  input  logic arready,
-  input  logic rvalid,
-  input  logic [DATA_WIDTH-1:0] rdata,
-  input  logic [1:0] rresp,
-  output logic rready
+  output reg awvalid,
+  output reg [ADDR_WIDTH-1:0] awaddr,
+  output reg [2:0]            awprot,
+  input  wire awready,
+  output reg wvalid,
+  output reg [DATA_WIDTH-1:0]   wdata,
+  output reg [DATA_WIDTH/8-1:0] wstrb,
+  input  wire wready,
+  input  wire bvalid,
+  input  wire [1:0] bresp,
+  output reg bready,
+  output reg arvalid,
+  output reg [ADDR_WIDTH-1:0] araddr,
+  output reg [2:0]            arprot,
+  input  wire arready,
+  input  wire rvalid,
+  input  wire [DATA_WIDTH-1:0] rdata,
+  input  wire [1:0] rresp,
+  output reg rready
 );
 
   localparam L_IDLE = 2'd0, L_AW = 2'd1, L_WD = 2'd2, L_B = 2'd3;
   localparam R_IDLE = 2'd0, R_AR = 2'd1, R_RD = 2'd2;
-  logic [1:0] l_state, r_state;
-  logic [1:0] wr_status_q, rd_status_q;
-  logic [DATA_WIDTH-1:0] rd_data_q;
-  logic wr_done_q, rd_done_q;   // 寄存完成脉冲（轮询在次拍可见）
+  reg [1:0] l_state, r_state;
+  reg [1:0] wr_status_q, rd_status_q;
+  reg [DATA_WIDTH-1:0] rd_data_q;
+  reg wr_done_q, rd_done_q;   // 寄存完成脉冲（轮询在次拍可见）
 
   // AW 与 AR 同拍竞争时 AW 优先（阻塞式，一次一笔）
   always_comb begin
